@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Support\MysqlDumper;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -54,13 +55,27 @@ class BackupDatabase extends Command
     private function mysql(array $db, string $dir, string $stamp): string
     {
         $target = "{$dir}/backup_{$stamp}.sql";
-        $process = new Process([
-            'mysqldump', '--single-transaction', '--quick', '--routines', '--no-tablespaces',
-            '--host='.$db['host'], '--port='.$db['port'], '--user='.$db['username'],
-            '--result-file='.$target, $db['database'],
-        ], null, ['MYSQL_PWD' => (string) $db['password']], null, 600);
-        $process->mustRun();
-        $this->gzip($target);
+
+        // mysqldump إن أمكن تشغيله، وإلا (كما في Hostinger حيث proc_open معطّلة) نسخة بلغة PHP
+        if (function_exists('proc_open')) {
+            try {
+                $process = new Process([
+                    'mysqldump', '--single-transaction', '--quick', '--routines', '--no-tablespaces',
+                    '--host='.$db['host'], '--port='.$db['port'], '--user='.$db['username'],
+                    '--result-file='.$target, $db['database'],
+                ], null, ['MYSQL_PWD' => (string) $db['password']], null, 600);
+                $process->mustRun();
+                $this->gzip($target);
+
+                return $target.'.gz';
+            } catch (\Throwable $e) {
+                @unlink($target);
+                $this->warn('mysqldump unavailable, using PHP dumper: '.strtok($e->getMessage(), "\n"));
+            }
+        }
+
+        $rows = (new MysqlDumper($db))->dump($target.'.gz');
+        $this->line("PHP dumper: {$rows} rows");
 
         return $target.'.gz';
     }

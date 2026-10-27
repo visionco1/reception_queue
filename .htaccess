@@ -1,18 +1,18 @@
+# ─────────────────────────────────────────────────────────────
+# للاستضافة المشتركة (مثل Hostinger) حين يُرفع المشروع كاملًا داخل public_html:
+# يحوّل كل الطلبات إلى مجلد public فلا تُفتح ملفات المشروع (.env وغيره) من المتصفح.
+# على خادم يشير فيه الدومين إلى مجلد public مباشرة لا يُستخدم هذا الملف.
+# ─────────────────────────────────────────────────────────────
+Options -Indexes
+
 <IfModule mod_rewrite.c>
-    Options -Indexes
     RewriteEngine On
-
-    # Force HTTPS
-    RewriteCond %{HTTPS} off
-    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-
-    # Send every request to the public folder, so files like .env,
-    # vendor/ and storage/ in the project root can't be reached directly
-    RewriteCond %{REQUEST_URI} !^/public/
     RewriteRule ^(.*)$ public/$1 [L]
 </IfModule>
 
-# Deny any hidden file (.env, .git, ...)
-<FilesMatch "^\.">
-    Require all denied
-</FilesMatch>
+# حماية إضافية: منع أي ملف يبدأ اسمه بنقطة (.env، .git ...)
+<IfModule mod_authz_core.c>
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+</IfModule>

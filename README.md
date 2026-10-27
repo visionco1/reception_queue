@@ -139,6 +139,55 @@ stdout_logfile=/var/www/reception/storage/logs/worker.log
 
 ---
 
+## الرفع على Hostinger (استضافة مشتركة)
+
+جُرّبت هذه الطريقة على نفس ترتيب ملفات Hostinger وبنفس قيودها: المشروع كاملًا داخل `public_html`، وملف `.htaccess` الموجود في جذر المشروع يحوّل كل الطلبات إلى مجلد `public` فلا يمكن فتح `.env` أو أي ملف من ملفات المشروع من المتصفح.
+
+> **قيد مهم في Hostinger:** دالة `proc_open` معطّلة، فلا يستطيع PHP تشغيل برامج أخرى. لذلك: يُشغَّل `composer install` مع `--no-scripts`، والمهام الدورية في النظام تعمل داخل نفس عملية PHP، والنسخ الاحتياطي يعمل بلغة PHP بدل `mysqldump`. كل هذا مضبوط في الكود، فقط اتبع الأوامر كما هي.
+
+1. **إصدار PHP:** من hPanel ← **PHP Configuration** اختر **8.3** أو أحدث.
+2. **قاعدة البيانات:** من **Databases** أنشئ قاعدة MySQL ومستخدمًا، واحفظ الاسم واليوزر وكلمة المرور (تبدأ بـ `u123456789_`).
+3. **SSH:** من **Advanced ← SSH Access** فعّل الخدمة، ثم اتصل: `ssh -p 65002 u123456789@IP`.
+4. **تنزيل المشروع من GitHub:**
+   ```bash
+   cd ~/domains/your-domain.com
+   mv public_html public_html_old          # احتياط لمحتوى المجلد الحالي، احذفه بعد التأكد
+   git clone https://github.com/USER/REPO.git public_html
+   cd public_html
+   composer install --no-dev --optimize-autoloader --no-scripts
+   php artisan package:discover --ansi
+   ```
+   مجلد `public/build` (ملفات التصميم والخطوط المبنية) محفوظ داخل المستودع لأن الاستضافة لا تحتوي Node.js. بعد أي تعديل في `resources/css` أو `resources/js` شغّل `npm run build` على جهازك قبل `git push`.
+5. **ملف الإعدادات:**
+   ```bash
+   cp .env.hostinger.example .env
+   nano .env
+   ```
+   عدّل الأسطر المعلّمة بـ ←: `APP_URL` وبيانات قاعدة البيانات و`ADMIN_PASSWORD`. للحفظ في nano: `Ctrl+O` ثم `Enter` ثم `Ctrl+X`. (أو عدّله من File Manager.)
+6. **التثبيت:**
+   ```bash
+   php artisan key:generate --force
+   php artisan migrate --force --seed
+   php artisan optimize
+   ```
+   يطبع أمر `migrate` رابط الآيباد ورابط شاشة العرض وحساب المدير.
+7. **المهام الدورية وإرسال واتساب:** اعرف مسار PHP بالأمر `which php`، ثم من **Advanced ← Cron Jobs** أنشئ مهمة من نوع **Custom** تعمل **كل دقيقة** (`* * * * *`):
+   ```
+   /usr/bin/php /home/u123456789/domains/your-domain.com/public_html/artisan schedule:run
+   ```
+   استبدل مسار PHP ورقم المستخدم والدومين. هذا السطر وحده يرسل رسائل واتساب خلال ثوانٍ (لأن `QMS_QUEUE_VIA_SCHEDULER=true`) ويشغّل النسخ الاحتياطي اليومي وإغلاق تذاكر الأيام السابقة. توقيت Cron في Hostinger هو UTC ولا يؤثر لأن المهمة تعمل كل دقيقة والنظام يستخدم `APP_TIMEZONE`.
+8. **SSL:** تأكد من تفعيل شهادة SSL المجانية للدومين، ثم افتح `https://your-domain.com/login`.
+
+**التحديثات لاحقًا:** ارفع التعديلات إلى GitHub من جهازك، ثم على السيرفر:
+```bash
+cd ~/domains/your-domain.com/public_html && bash deploy.sh
+```
+السكربت يسحب التعديلات ويثبت الحزم ويحدّث قاعدة البيانات دون أن يلمس `.env` أو `storage`. وإذا عدّلت `.env` يدويًا نفّذ بعدها `php artisan optimize`.
+
+**بدون Git:** ارفع `reception-queue-laravel.zip` من File Manager إلى `public_html` واستخرجه، وانقل **محتوى** مجلد `reception-queue` إلى `public_html` مباشرة (الملف يحتوي `vendor` و`public/build` جاهزين فلا حاجة لـ composer)، ثم أكمل من الخطوة 5. ويمكن تنفيذ أوامر الخطوة 6 بدون SSH بإنشاء مهمة Cron مؤقتة لكل أمر ثم حذفها.
+
+**النسخ الاحتياطية:** تُحفظ يوميًا في `storage/app/backups` بصيغة `.sql.gz`، وتُستعاد من phpMyAdmin ← Import.
+
 ## ربط واتساب (WhatsApp Business Platform من Meta)
 
 1. أنشئ تطبيقًا في [Meta for Developers](https://developers.facebook.com/) وأضف منتج WhatsApp، واربط رقم هاتف الشركة بحساب WhatsApp Business.

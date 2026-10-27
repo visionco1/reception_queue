@@ -13,6 +13,12 @@
 
 return [
 
+    // حساب المدير الأول — يُنشأ مرة واحدة عند db:seed
+    'admin' => [
+        'username' => env('ADMIN_USERNAME', 'admin'),
+        'password' => env('ADMIN_PASSWORD'),
+    ],
+
     // سياسة الطابور
     'queue' => [
         // إغلاق تذاكر الأيام السابقة التي بقيت في الانتظار (يعمل يوميًا عبر المجدول)

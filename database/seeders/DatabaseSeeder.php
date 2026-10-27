@@ -40,16 +40,17 @@ class DatabaseSeeder extends Seeder
         }
 
         if (! User::query()->where('role', Role::Admin)->exists()) {
-            $password = env('ADMIN_PASSWORD') ?: 'ChangeMe@2026';
+            $password = config('qms.admin.password') ?: 'ChangeMe@2026';
+            $username = config('qms.admin.username') ?: 'admin';
             User::create([
                 'name' => 'مدير النظام',
-                'username' => env('ADMIN_USERNAME', 'admin'),
+                'username' => $username,
                 'password' => $password,
                 'role' => Role::Admin,
                 'desk_id' => Desk::query()->orderBy('sort_order')->value('id'),
                 'is_active' => true,
             ]);
-            $this->command?->warn('حساب المدير: '.env('ADMIN_USERNAME', 'admin').' / '.$password.' — غيّر كلمة المرور فور الدخول.');
+            $this->command?->warn('حساب المدير: '.$username.' / '.$password.' — غيّر كلمة المرور فور الدخول.');
         }
 
         $settings = app(Settings::class);
