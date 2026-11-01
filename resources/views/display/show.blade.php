@@ -1,116 +1,130 @@
 @extends('layouts.base')
-@section('title', __('شاشة الانتظار'))
-@section('body_class', 'h-dvh overflow-hidden antialiased cursor-none')
+@section('title', __('شاشة العرض'))
+@section('body_class', 'antialiased overflow-hidden bg-[#141914]')
 
 @push('head')
     <style>
-        :root {
-            --d-bg: {{ setting('display_bg') }};
-            --d-fg: {{ setting('display_primary') }};
-            --d-accent: {{ setting('display_accent') }};
-        }
-        body { background: var(--d-bg); color: var(--d-fg); }
-        .d-muted { color: color-mix(in oklab, var(--d-fg) 62%, var(--d-bg)); }
-        .d-rule { border-color: color-mix(in oklab, var(--d-fg) 16%, var(--d-bg)); }
-        .d-panel { background: color-mix(in oklab, var(--d-fg) 6%, var(--d-bg)); }
-
-        /* رقم المكتب كختم رسمي */
-        .stamp {
-            display: inline-flex; align-items: center; gap: 0.35em;
-            background: var(--d-accent);
-            color: color-mix(in oklab, var(--d-bg) 85%, black);
-            padding: 0.12em 0.55em 0.18em;
-            border-radius: 0.22em;
-            box-shadow: inset 0 0 0 0.07em color-mix(in oklab, var(--d-bg) 70%, transparent), inset 0 0 0 0.12em var(--d-accent), inset 0 0 0 0.15em color-mix(in oklab, var(--d-bg) 40%, transparent);
-            transform: rotate(-2deg);
-        }
-        .call-in .ticket-big { animation: rise 700ms cubic-bezier(.2,.9,.2,1) both; }
-        .call-in .stamp { animation: stamp 520ms 380ms cubic-bezier(.3,1.6,.5,1) both; }
-        .call-in .call-ring { animation: ring 2.4s ease-out both; }
-        @keyframes rise { from { opacity: 0; transform: translateY(0.12em) scale(0.94); } to { opacity: 1; transform: none; } }
-        @keyframes stamp { from { opacity: 0; transform: scale(1.5) rotate(-9deg); } to { opacity: 1; transform: scale(1) rotate(-2deg); } }
-        @keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--d-accent) 55%, transparent); } 100% { box-shadow: 0 0 0 2.5vw transparent; } }
+        /* لوحة بمقاس 1920×1080 تُكبَّر وتُصغَّر لتملأ أي شاشة بنفس النسب */
+        .stage { width: 1920px; height: 1080px; position: absolute; top: 50%; left: 50%; transform-origin: center; color: var(--color-ivory); }
+        .num { font-family: var(--font-num); font-weight: 600; direction: ltr; unicode-bidi: isolate; letter-spacing: 0.035em; font-variant-numeric: tabular-nums; }
+        .zoom-in { animation: zoomIn 900ms cubic-bezier(.2, .9, .25, 1.15) both; }
+        @keyframes zoomIn { 0% { transform: scale(.82); opacity: 0; } 60% { transform: scale(1.04); opacity: 1; } 100% { transform: scale(1); } }
+        .glow { animation: glow 2.4s ease-out both; }
+        @keyframes glow { 0% { box-shadow: 0 0 0 0 rgb(187 152 96 / .55); } 100% { box-shadow: 0 0 0 46px rgb(187 152 96 / 0); } }
+        .ticker { overflow: hidden; direction: ltr; white-space: nowrap; }
+        .ticker .track { display: inline-block; padding-left: 100%; animation: tick var(--dur, 40s) linear infinite; direction: rtl; }
+        @keyframes tick { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+        .fade { animation: fade 700ms ease both; }
+        @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
     </style>
 @endpush
 
 @section('body')
-<div x-data="display({
-        feedUrl: @js(route('display.feed', $token)),
-        pollMs: {{ (int) config('qms.queue.poll_ms') }},
-        version: @js($version),
-        sound: @js((bool) setting('display_sound')),
-        voice: @js((bool) setting('display_voice')),
-     })"
-     @click="enableSound()"
-     class="h-dvh grid grid-rows-[auto_1fr_auto] px-[3.2vw] py-[2.6vh]">
+<div x-data="display({ feedUrl: @js(route('display.feed', $token)), version: @js($version), pollMs: {{ (int) config('qms.queue.poll_ms', 2500) }} })"
+     x-init="const fit = () => { const s = Math.min(innerWidth / 1920, innerHeight / 1080); $refs.stage.style.transform = `translate(-50%, -50%) scale(${s})`; }; fit(); addEventListener('resize', fit)"
+     class="fixed inset-0">
+    <div x-ref="stage" class="stage olive" style="transform: translate(-50%, -50%)">
 
-    <header class="flex items-center justify-between gap-6 pb-[2vh] border-b d-rule">
-        <div class="flex items-center gap-[1.2vw] min-w-0">
-            @if (setting('logo_path'))
-                <img src="{{ asset(setting('logo_path')) }}" alt="" class="h-[6.5vh] w-auto">
-            @endif
-            <div class="font-display font-bold text-[2.3vw] leading-tight truncate">{{ setting('company_name') }}</div>
-        </div>
-        <div class="text-end shrink-0">
-            <div class="font-display font-semibold text-[2.3vw] leading-none ltr-nums" x-text="clock"></div>
-            <div class="d-muted text-[1.15vw] mt-[0.6vh]" x-text="date"></div>
-        </div>
-    </header>
-
-    <main class="grid grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] gap-[3vw] py-[3vh] min-h-0">
-        {{-- النداء الحالي --}}
-        <section class="flex flex-col justify-center min-w-0" aria-live="assertive">
-            <template x-if="current">
-                <div :class="flash && 'call-in'" class="flex flex-col items-start">
-                    <div class="d-muted text-[1.9vw] font-semibold">
-                        <span x-show="!current.recall" x-text="current.tickets.length === 1 ? @js(__('الرقم')) : (current.tickets.length === 2 ? @js(__('الرقمان')) : @js(__('الأرقام')))"></span>
-                        <span x-show="current.recall" x-cloak x-text="current.tickets.length > 1 ? @js(__('نداء مجدد للأرقام')) : @js(__('نداء مجدد للرقم'))"></span>
-                    </div>
-                    <div class="call-ring rounded-[2vw] -ms-[1vw] px-[1vw]">
-                        <div class="ticket-big ticket-code leading-[0.95] whitespace-nowrap"
-                             :class="current.tickets.length > 2 ? 'text-[min(5vw,14vh)]' : (current.tickets.length === 2 ? 'text-[min(7.5vw,20vh)]' : 'text-[min(17vw,36vh)]')"
-                             x-text="current.tickets.join(' + ')"></div>
-                    </div>
-                    <div class="mt-[3vh] flex items-center gap-[1.4vw] font-display font-bold text-[3.6vw]">
-                        <span>{{ __('توجّه إلى') }}</span>
-                        <span class="stamp">{{ __('مكتب') }} <span class="ltr-nums" x-text="current.desk"></span></span>
-                    </div>
-                    <div class="d-muted text-[1.6vw] mt-[2.2vh]" x-show="current.employee" x-text="current.employee"></div>
+        {{-- الرأس: الشعار والساعة والتاريخ --}}
+        <header class="absolute inset-x-0 top-0 h-[130px] px-[66px] flex items-center justify-between border-b border-white/10">
+            <img src="{{ asset('brand/logo-gold.svg') }}" alt="{{ setting('company_name') }}" class="h-[74px] w-auto" x-show="view !== 'idle'">
+            <span x-show="view === 'idle'"></span>
+            <div class="flex items-center gap-6" data-clock>
+                <div class="text-[24px] leading-[1.45] text-[#d6cfc0] text-start">
+                    <div data-clock-date></div>
+                    <div data-clock-hijri></div>
                 </div>
-            </template>
-            <template x-if="!current">
-                <div>
-                    <div class="font-display font-bold text-[4.4vw] leading-tight">{{ __('أهلًا بكم') }}</div>
-                    <p class="d-muted text-[2vw] mt-[2vh] max-w-[48vw] leading-relaxed">{{ __('سجّل بياناتك من جهاز الاستقبال، وسيظهر رقمك هنا مع رقم المكتب.') }}</p>
+                <div class="num text-[64px] leading-none text-ivory">
+                    <span data-clock-time></span><span class="text-gold text-[34px] ms-2" style="font-family: var(--font-display)" data-clock-suffix></span>
+                </div>
+            </div>
+        </header>
+
+        {{-- النداءات السابقة --}}
+        <aside class="absolute top-[130px] bottom-[90px] left-0 w-[622px] border-r border-white/10 bg-gradient-to-b from-black/15 to-black/5 px-[54px] pt-[48px]" x-show="view !== 'idle'">
+            <h2 class="text-[32px] font-bold text-ivory pb-6 border-b border-white/10">{{ __('النداءات السابقة') }}</h2>
+            <ol>
+                <template x-for="(c, i) in recent.slice(0, 5)" :key="c.ticket_no + c.at">
+                    <li class="h-[108px] flex items-center justify-between border-b border-white/10 fade">
+                        <span class="num text-[60px] leading-none" :class="i === 0 ? 'text-gold' : 'text-ivory'" x-text="c.ticket_no"></span>
+                        <span class="flex items-baseline gap-8">
+                            <span class="text-[30px] text-ivory">{{ __('مكتب') }} <b class="num text-gold" x-text="c.desk"></b></span>
+                            <span class="num text-[24px] text-[#a9a597]" x-text="timeOf(c.at)"></span>
+                        </span>
+                    </li>
+                </template>
+            </ol>
+            <p x-show="!recent.length" class="mt-10 text-[26px] text-[#a9a597]">{{ __('لا توجد نداءات سابقة اليوم') }}</p>
+        </aside>
+
+        {{-- الرقم الحالي --}}
+        <section x-show="view === 'current'" class="absolute top-[200px] bottom-[162px] left-[710px] right-[90px] rounded-[40px] border-[1.5px] border-gold/35 grid place-items-center text-center">
+            <template x-if="current">
+                <div class="w-full" x-effect="zoomKey; $el.classList.remove('zoom-in'); void $el.offsetWidth; $el.classList.add('zoom-in')">
+                    <div class="text-[40px] text-[#e2dccd]" x-text="current.tickets.length > 1 ? '{{ __('الأرقام الحالية') }}' : '{{ __('الرقم الحالي') }}'"></div>
+                    <div class="num text-gold leading-[1.02] mt-1 flex flex-wrap items-center justify-center gap-x-10"
+                         :class="current.tickets.length > 1 ? 'text-[170px]' : 'text-[300px]'">
+                        <template x-for="(t, i) in current.tickets" :key="t">
+                            <span class="flex items-center gap-10"><span x-show="i > 0" class="text-[90px] text-gold/70">+</span><span x-text="t"></span></span>
+                        </template>
+                    </div>
+                    <div class="mt-6 inline-flex items-center gap-7 rounded-[24px] bg-shade px-12 h-[118px] text-olive" x-effect="zoomKey; $el.classList.remove('glow'); void $el.offsetWidth; $el.classList.add('glow')">
+                        <span class="text-[40px]">{{ __('تفضّل إلى') }}</span>
+                        <span class="text-[72px] font-bold">{{ __('مكتب') }}</span>
+                        <span class="num text-[72px] text-gold-dark" x-text="current.desk"></span>
+                    </div>
+                    <div class="mt-6 text-[38px] text-[#e2dccd] h-[48px]" x-text="current.names.join(' · ')"></div>
                 </div>
             </template>
         </section>
 
-        {{-- آخر الأرقام --}}
-        <aside class="d-panel rounded-[1.2vw] px-[2vw] py-[2.6vh] flex flex-col min-h-0">
-            <h2 class="d-muted text-[1.45vw] font-semibold pb-[1.6vh] border-b d-rule">{{ __('النداءات السابقة') }}</h2>
-            <ol class="flex-1 min-h-0">
-                <template x-for="call in recent" :key="call.id">
-                    <li class="flex items-center justify-between py-[1.7vh] border-b d-rule last:border-b-0">
-                        <span class="ticket-code text-[3.1vw] leading-none" x-text="call.ticket_no"></span>
-                        <span class="font-display font-semibold text-[1.9vw] d-muted">{{ __('مكتب') }} <span class="ltr-nums" style="color: var(--d-fg)" x-text="call.desk"></span></span>
-                    </li>
+        {{-- لوحة المكاتب --}}
+        <section x-show="view === 'offices'" x-cloak class="absolute top-[200px] bottom-[162px] left-[710px] right-[90px]">
+            <div class="h-full grid gap-6" :class="offices.length > 6 ? 'grid-cols-4' : (offices.length > 4 ? 'grid-cols-3' : 'grid-cols-2')">
+                <template x-for="o in offices" :key="o.number">
+                    <div class="rounded-[28px] border-[1.5px] flex flex-col items-center justify-center"
+                         :class="o.tickets.length ? 'border-gold/60 bg-black/10' : 'border-white/10'">
+                        <div class="text-[34px] text-[#e2dccd]">{{ __('مكتب') }} <b class="num text-gold" x-text="o.number"></b></div>
+                        <div class="num mt-3 leading-none" :class="o.tickets.length ? 'text-gold text-[96px]' : 'text-[#7d8079] text-[48px]'"
+                             x-text="o.tickets.length ? o.tickets.join(' + ') : '{{ __('متاح') }}'"></div>
+                    </div>
                 </template>
-                <li x-show="!recent.length" class="d-muted text-[1.4vw] pt-[2vh]">{{ __('لا توجد نداءات سابقة اليوم') }}</li>
-            </ol>
-        </aside>
-    </main>
+            </div>
+        </section>
 
-    <footer class="flex items-center justify-between gap-6 pt-[2vh] border-t d-rule text-[1.45vw]">
-        <p class="d-muted truncate">{{ setting('welcome_message') }}</p>
-        <p class="shrink-0 font-semibold">
-            {{ __('في الانتظار الآن') }}: <span class="ltr-nums font-display" x-text="waiting"></span>
-        </p>
-    </footer>
+        {{-- وقت الهدوء: الشعار --}}
+        <section x-show="view === 'idle'" x-cloak class="absolute top-[130px] bottom-[90px] inset-x-0 grid place-items-center text-center fade">
+            <div>
+                <img src="{{ asset('brand/logo-gold.svg') }}" alt="{{ setting('company_name') }}" class="w-[880px] h-auto mx-auto">
+                <div class="mt-14 mx-auto w-[120px] h-[2px] bg-gold/70"></div>
+                <p class="mt-10 text-[38px] text-[#e2dccd]">{{ __('أهلًا بكم، تابع رقمك على الشاشة أو على واتساب') }}</p>
+            </div>
+        </section>
 
-    <div x-show="!soundReady" x-cloak class="fixed bottom-[3vh] inset-x-0 flex justify-center cursor-pointer">
-        <span class="d-panel rounded-full px-[1.6vw] py-[1vh] text-[1.2vw]" style="outline: 1px solid var(--d-accent)">{{ __('اضغط في أي مكان لتفعيل صوت التنبيه') }}</span>
+        {{-- الشريط السفلي: رسائل الإدارة وعدد المنتظرين --}}
+        <footer class="absolute inset-x-0 bottom-0 h-[90px] border-t border-white/10 bg-black/15 px-[66px] flex items-center gap-10">
+            <div class="ticker flex-1 text-[30px] text-ivory" :style="`--dur: ${Math.max(28, ticker.join('').length * 0.32)}s`">
+                <template x-if="ticker.length">
+                    <span class="track">
+                        <template x-for="(m, i) in ticker" :key="i">
+                            <span><span x-text="m"></span><span class="text-gold text-[22px] mx-10" aria-hidden="true">◆</span></span>
+                        </template>
+                    </span>
+                </template>
+            </div>
+            <div class="shrink-0 flex items-baseline gap-9 text-[28px] text-[#e2dccd]">
+                <span>{{ __('مشتري') }} <b class="num text-gold text-[38px]" x-text="waiting.buyer"></b></span>
+                <span>{{ __('بائع') }} <b class="num text-gold text-[38px]" x-text="waiting.seller"></b></span>
+                <span>{{ __('الانتظار التقريبي') }} <b class="num text-gold text-[38px]" x-text="waiting.minutes"></b>{{ __('د') }}</span>
+            </div>
+        </footer>
+
+        <div x-show="offline" x-cloak class="absolute top-[150px] left-1/2 -translate-x-1/2 rounded-full bg-danger text-white text-[24px] px-8 py-2">{{ __('انقطع الاتصال… جارٍ إعادة المحاولة') }}</div>
     </div>
-    <div x-show="offline" x-cloak class="fixed top-[2vh] inset-x-0 flex justify-center"><span class="rounded-full px-[1.2vw] py-[0.6vh] text-[1vw] bg-black/40">{{ __('انقطع الاتصال، تتم إعادة المحاولة…') }}</span></div>
+
+    {{-- المتصفح لا يسمح بالصوت قبل أول لمسة --}}
+    <button x-show="needsTap" x-cloak @click="enableSound()" class="fixed top-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-gold text-olive font-bold px-6 py-3 shadow-lg">
+        {{ __('اضغط لتفعيل صوت النداء') }}
+    </button>
 </div>
 @endsection

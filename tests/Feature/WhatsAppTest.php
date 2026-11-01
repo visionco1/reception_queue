@@ -34,7 +34,7 @@ class WhatsAppTest extends TestCase
         Http::assertSent(fn ($r) => str_contains($r->url(), '/123456/messages')
             && $r['to'] === '966551234567'
             && $r['type'] === 'text'
-            && str_contains($r['text']['body'], 'M001'));
+            && str_contains($r['text']['body'], 'M-001'));
 
         $log = WhatsappLog::sole();
         $this->assertSame('sent', $log->status);
@@ -53,14 +53,14 @@ class WhatsAppTest extends TestCase
             && $r['template']['name'] === 'queue_registered'
             && $r['template']['language']['code'] === 'ar'
             && $r['template']['components'][0]['parameters'][0]['text'] === 'محمد أحمد'
-            && $r['template']['components'][0]['parameters'][1]['text'] === 'M001');
+            && $r['template']['components'][0]['parameters'][1]['text'] === 'M-001');
     }
 
     public function test_provider_failure_never_blocks_registration(): void
     {
         Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'Invalid parameter', 'code' => 100]], 400)]);
 
-        $this->registerAtKiosk()->assertCreated()->assertJsonPath('ticket_no', 'M001');
+        $this->registerAtKiosk()->assertCreated()->assertJsonPath('ticket_no', 'M-001');
 
         $log = WhatsappLog::sole();
         $this->assertSame('failed', $log->status);

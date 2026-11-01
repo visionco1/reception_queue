@@ -6,26 +6,50 @@ const LETTER_NAMES = {
 };
 
 /**
- * شاشة الانتظار: تستعلم عن آخر النداءات دوريًا، وعند نداء جديد تُظهر
- * حركة بسيطة وصوت تنبيه. تعيد التحميل تلقائيًا إذا غيّرت الإدارة إعدادات العرض.
+ * شاشة العرض (الشاشة 02): تستعلم عن النداءات دوريًا. عند كل نداء يظهر الرقم
+ * بحركة تكبير خفيفة مع صوت تنبيه ونطق آلي بالعربي، وبعد فترة بدون نداء جديد
+ * تعود الشاشة للشعار (وقت الهدوء). تعيد التحميل إذا غيّرت الإدارة الإعدادات.
  */
 export default (config) => ({
-    current: null,
-    recent: [],
-    waiting: 0,
-    flash: false,
+    data: null,
+    view: 'idle',
     offline: false,
     soundReady: false,
-    now: new Date(),
     lastId: null,
     audio: null,
+    offset: 0,
+    zoomKey: 0,
+    tickerKey: '',
 
     init() {
         this.poll();
         setInterval(() => this.poll(), config.pollMs);
-        setInterval(() => (this.now = new Date()), 1000);
-        // بعض المتصفحات لا تسمح بالصوت قبل أول لمسة
-        this.soundReady = !config.sound;
+        setInterval(() => this.updateView(), 1000);
+        this.soundReady = false;
+    },
+
+    get current() {
+        return this.data?.current ?? null;
+    },
+
+    get recent() {
+        return this.data?.recent ?? [];
+    },
+
+    get waiting() {
+        return this.data?.waiting ?? { total: 0, buyer: 0, seller: 0, minutes: 0 };
+    },
+
+    get offices() {
+        return this.data?.offices ?? [];
+    },
+
+    get ticker() {
+        return this.data?.ticker ?? [];
+    },
+
+    get needsTap() {
+        return !this.soundReady && (this.data?.sound || this.data?.voice);
     },
 
     enableSound() {
@@ -33,9 +57,7 @@ export default (config) => ({
             this.audio = this.audio || new (window.AudioContext || window.webkitAudioContext)();
             this.audio.resume();
         } catch (e) {}
-        if (config.voice && 'speechSynthesis' in window) {
-            window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
-        }
+        if ('speechSynthesis' in window) window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
         this.soundReady = true;
     },
 
@@ -47,26 +69,39 @@ export default (config) => ({
                 window.location.reload();
                 return;
             }
+            this.offset = new Date(data.server_time).getTime() - Date.now();
             const incoming = data.current;
-            const isNew = incoming && incoming.id !== this.lastId;
             const firstLoad = this.lastId === null;
-            this.current = incoming;
-            this.recent = data.recent;
-            this.waiting = data.waiting;
+            const isNew = incoming && incoming.id !== this.lastId;
+            this.data = data;
+            const key = (data.ticker || []).join('|');
+            if (key !== this.tickerKey) this.tickerKey = key;
             if (incoming) this.lastId = incoming.id;
             else if (firstLoad) this.lastId = 0;
+            this.updateView();
             if (isNew && !firstLoad) this.announce(incoming);
         } catch (e) {
             this.offline = true;
         }
     },
 
+    /** current: الرقم الحالي | offices: لوحة المكاتب | idle: الشعار بعد فترة بدون نداء */
+    updateView() {
+        if (!this.data) return;
+        const call = this.current;
+        const age = call ? (Date.now() + this.offset - new Date(call.at).getTime()) / 1000 : Infinity;
+        const quiet = age > (this.data.idle_seconds || 60);
+        if (this.data.mode === 'offices') {
+            this.view = quiet && !this.offices.some((o) => o.tickets.length) ? 'idle' : 'offices';
+        } else {
+            this.view = quiet ? 'idle' : 'current';
+        }
+    },
+
     announce(call) {
-        this.flash = false;
-        requestAnimationFrame(() => (this.flash = true));
-        setTimeout(() => (this.flash = false), 2600);
-        if (config.sound) this.chime();
-        if (config.voice) setTimeout(() => this.speak(call), 1300);
+        this.zoomKey++;
+        if (this.data?.sound) this.chime();
+        if (this.data?.voice) setTimeout(() => this.speak(call), 1300);
     },
 
     chime() {
@@ -89,8 +124,9 @@ export default (config) => ({
         } catch (e) {}
     },
 
+    /** «M-014» تُنطق «إم 14» */
     spokenTicket(ticket) {
-        const match = /^([A-Za-z]*)(\d+)$/.exec(ticket) || [];
+        const match = /^([A-Za-z]*)-?(\d+)$/.exec(ticket) || [];
         const letters = (match[1] || '').toUpperCase().split('').map((l) => LETTER_NAMES[l] || l).join(' ');
         const number = match[2] ? parseInt(match[2], 10) : ticket;
         return `${letters} ${number}`;
@@ -98,20 +134,25 @@ export default (config) => ({
 
     speak(call) {
         if (!('speechSynthesis' in window)) return;
-        const tickets = (call.tickets || [call.ticket_no]).map((t) => this.spokenTicket(t));
+        const tickets = (call.tickets || []).map((t) => this.spokenTicket(t));
         const label = tickets.length > 1 ? 'الأرقام' : 'الرقم';
-        const u = new SpeechSynthesisUtterance(`${label} ${tickets.join(' و ')}، التوجه إلى مكتب ${call.desk}`);
+        const u = new SpeechSynthesisUtterance(`${label} ${tickets.join(' و ')}، مكتب ${call.desk}`);
         u.lang = 'ar-SA';
         u.rate = 0.9;
+        const voice = window.speechSynthesis.getVoices().find((v) => v.lang?.startsWith('ar'));
+        if (voice) u.voice = voice;
         window.speechSynthesis.cancel();
         window.speechSynthesis.speak(u);
     },
 
-    get clock() {
-        return this.now.toLocaleTimeString('ar-SA-u-nu-latn', { hour: 'numeric', minute: '2-digit' });
-    },
-
-    get date() {
-        return this.now.toLocaleDateString('ar-SA-u-nu-latn-ca-gregory', { weekday: 'long', day: 'numeric', month: 'long' });
+    timeOf(iso) {
+        return new Intl.DateTimeFormat('en-GB', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+            timeZone: document.querySelector('meta[name="app-tz"]')?.content || undefined,
+        })
+            .format(new Date(iso))
+            .replace(/\s?[ap]m/i, '');
     },
 });

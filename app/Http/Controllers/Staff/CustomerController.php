@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Staff;
 
 use App\Enums\ClientSource;
 use App\Enums\CustomerType;
+use App\Enums\ViaDetail;
 use App\Http\Controllers\Controller;
 use App\Models\Bank;
 use App\Models\Customer;
@@ -105,7 +106,7 @@ class CustomerController extends Controller
         ]);
     }
 
-    /** إضافة عميل عن بعد: يُسجل في قاعدة البيانات بدون رقم انتظار */
+    /** إضافة عميل عن بُعد إلى قائمة الانتظار برقم */
     public function storeRemote(Request $request)
     {
         $data = $request->validate([
@@ -114,6 +115,7 @@ class CustomerController extends Controller
             'customer_type' => ['required', Rule::enum(CustomerType::class)],
             'client_type_id' => ['nullable', 'required_if:customer_type,other', Rule::exists('client_types', 'id')->where('is_active', true)],
             'bank_id' => ['nullable', Rule::exists('banks', 'id')],
+            'via_detail' => ['nullable', Rule::enum(ViaDetail::class)],
             'agent_id' => ['nullable', Rule::exists('bank_agents', 'id')->where('bank_id', $request->input('bank_id') ?: 0)],
             'source' => ['required', Rule::enum(ClientSource::class)],
             'notes' => ['nullable', 'string', 'max:2000'],
@@ -131,14 +133,13 @@ class CustomerController extends Controller
 
         [$visit, $existed] = $this->customers->addRemote($data, $request->user());
 
-        $message = $existed
-            ? __('أُضيف تفاعل جديد لسجل العميل :name', ['name' => $visit->customer->name])
-            : __('أُضيف العميل :name إلى قاعدة البيانات', ['name' => $visit->customer->name]);
+        $message = __('أُضيف :name إلى قائمة الانتظار برقم :ticket', ['name' => $visit->customer->name, 'ticket' => $visit->ticketNo()]);
 
         if ($request->expectsJson()) {
             return response()->json([
                 'message' => $message,
                 'existed' => $existed,
+                'ticket_no' => $visit->ticketNo(),
                 'customer_url' => route('staff.customers.show', $visit->customer_id),
             ], 201);
         }

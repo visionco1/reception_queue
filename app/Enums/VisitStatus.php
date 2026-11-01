@@ -14,11 +14,12 @@ enum VisitStatus: string
     public function label(): string
     {
         return match ($this) {
-            self::Waiting => __('انتظار'),
-            self::Called => __('تم الاستدعاء'),
+            // أسماء الحالات كما في دليل التنفيذ
+            self::Waiting => __('في الانتظار'),
+            self::Called => __('تم النداء'),
             self::InService => __('قيد الخدمة'),
-            self::Completed => __('انتهت الخدمة'),
-            self::NoShow => __('تم التخطي / لم يحضر'),
+            self::Completed => __('تمت الخدمة'),
+            self::NoShow => __('لم يحضر'),
             self::Cancelled => __('ملغي'),
         };
     }

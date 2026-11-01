@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\Customer;
-use App\Models\QueueTicket;
 use App\Models\Visit;
 use App\Models\WhatsappLog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -20,24 +19,43 @@ class RemoteCustomerTest extends TestCase
         $this->seedBasics();
     }
 
-    public function test_remote_customer_is_saved_without_ticket_or_queue_messages(): void
+    public function test_remote_customer_joins_the_waiting_list_with_a_number(): void
     {
         $employee = $this->employee();
 
         $this->actingAs($employee)->postJson('/staff/remote', [
             'mobile' => '0559876543', 'name' => 'سارة محمد', 'customer_type' => 'seller',
-            'bank_id' => '', 'source' => 'whatsapp', 'notes' => 'استفسار عن الإفراغ',
-        ])->assertCreated()->assertJsonPath('existed', false);
+            'bank_id' => '', 'via_detail' => 'individuals', 'source' => 'whatsapp', 'notes' => 'استفسار عن الإفراغ',
+        ])->assertCreated()->assertJsonPath('existed', false)->assertJsonPath('ticket_no', 'S-001');
 
-        $visit = Visit::sole();
+        $visit = Visit::with('ticket')->sole();
         $this->assertSame('remote', $visit->channel->value);
+        $this->assertSame('waiting', $visit->status->value);
         $this->assertSame('whatsapp', $visit->source->value);
-        $this->assertSame($employee->id, $visit->employee_id);
-        $this->assertSame(0, QueueTicket::count());
-        $this->assertSame(0, WhatsappLog::count());
+        $this->assertSame($employee->id, $visit->created_by);
+        $this->assertSame('أخرى · أفراد', $visit->viaLabel());
+        $this->assertSame('registered', WhatsappLog::sole()->message_key->value);
 
-        // لا يظهر في قائمة الانتظار
-        $this->actingAs($employee)->getJson('/staff/state')->assertJsonCount(0, 'waiting');
+        // يظهر في قائمة الانتظار مع شارة «عن بُعد»
+        $this->actingAs($employee)->getJson('/staff/state')
+            ->assertJsonCount(1, 'waiting')
+            ->assertJsonPath('waiting.0.ticket_no', 'S-001')
+            ->assertJsonPath('waiting.0.remote', true);
+
+        // لا يُضاف مرتين ما دام دوره قائمًا
+        $this->actingAs($employee)->postJson('/staff/remote', [
+            'mobile' => '0559876543', 'name' => 'سارة محمد', 'customer_type' => 'seller', 'source' => 'whatsapp',
+        ])->assertStatus(409)->assertJsonPath('message', 'العميل في قائمة الانتظار بالفعل برقم S-001');
+    }
+
+    public function test_other_client_types_get_their_own_prefix(): void
+    {
+        $employee = $this->employee();
+        $type = \App\Models\ClientType::create(['name' => 'استشارة قانونية']);
+
+        $this->actingAs($employee)->postJson('/staff/remote', [
+            'mobile' => '0557770000', 'name' => 'عميل استشارة', 'customer_type' => 'other', 'client_type_id' => $type->id, 'source' => 'call',
+        ])->assertCreated()->assertJsonPath('ticket_no', 'G-001');
     }
 
     public function test_lookup_warns_about_existing_customer_and_new_interaction_does_not_duplicate(): void
@@ -50,6 +68,7 @@ class RemoteCustomerTest extends TestCase
             ->assertJsonPath('customer.name', 'خالد العتيبي')
             ->assertJsonPath('customer.visits_count', 1);
 
+        Visit::query()->update(['status' => 'completed']);
         $this->actingAs($employee)->postJson('/staff/remote', [
             'mobile' => '+966551112222', 'name' => 'خالد العتيبي', 'customer_type' => 'buyer', 'source' => 'call',
         ])->assertCreated()->assertJsonPath('existed', true);
@@ -65,7 +84,7 @@ class RemoteCustomerTest extends TestCase
 
         $this->actingAs($employee)->get('/staff/customers?q=0553334444')->assertOk()->assertSee('نورة القحطاني');
         $this->actingAs($employee)->get('/staff/customers?q=3334444')->assertOk()->assertSee('نورة القحطاني');
-        $this->actingAs($employee)->get('/staff/customers/'.Customer::first()->id)->assertOk()->assertSee('M001');
+        $this->actingAs($employee)->get('/staff/customers/'.Customer::first()->id)->assertOk()->assertSee('M-001');
     }
 
     public function test_search_scope_can_be_limited_to_own_customers(): void

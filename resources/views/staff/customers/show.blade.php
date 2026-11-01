@@ -73,7 +73,12 @@
                                 @if ($v->agent)<span class="block text-xs text-ink-faint">{{ __('الوكيل') }}: {{ $v->agent->name }}</span>@endif
                                 <x-deal-with :visit="$v" class="mt-1" />
                             </td>
-                            <td><x-status-pill :status="$v->status" /></td>
+                            <td>
+                                <x-status-pill :status="$v->status" />
+                                @if ($v->outcome && $v->outcome !== \App\Enums\Outcome::Completed)
+                                    <span class="status-pill outcome-{{ $v->outcome->value }}">{{ $v->outcome->label() }}</span>
+                                @endif
+                            </td>
                             <td>{{ $v->employee?->name ?? '—' }}</td>
                             <td class="ltr-nums text-start whitespace-nowrap">{{ \App\Support\Duration::clock($v->wait_seconds) }} / {{ \App\Support\Duration::clock($v->service_seconds) }}</td>
                         </tr>

@@ -30,6 +30,14 @@ class BankController extends Controller
             'sort_order' => ['nullable', 'integer', 'min:0'],
         ]);
         $data['is_active'] = $request->boolean('is_active');
+        $data['is_featured'] = $data['is_active'] && $request->boolean('is_featured');
+
+        // الآيباد يعرض 4 بنوك فقط كأزرار
+        if ($data['is_featured'] && ! $bank->is_featured
+            && Bank::query()->where('is_featured', true)->where('is_active', true)->count() >= 4) {
+            return back()->withErrors(['is_featured' => __('يظهر على الآيباد 4 بنوك فقط. ألغِ أحدها أولًا.')]);
+        }
+
         $bank->update($data);
         AuditLog::record('bank.updated', $bank, __('تعديل بنك :n', ['n' => $bank->name]), $bank->getChanges());
 

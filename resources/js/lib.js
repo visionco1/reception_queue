@@ -77,3 +77,69 @@ export function visitsLabel(n) {
     if (n >= 3 && n <= 10) return `${n} زيارات`;
     return `${n} زيارة`;
 }
+
+const tz = () => document.querySelector('meta[name="app-tz"]')?.content || undefined;
+
+/** الساعة «10:24» ولاحقتها «ص/م» بتوقيت النظام */
+export function clockParts(date = new Date(), lang = 'ar') {
+    const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz() }).formatToParts(date);
+    const get = (t) => parts.find((p) => p.type === t)?.value ?? '';
+    const pm = get('dayPeriod').toUpperCase() === 'PM';
+    return { time: `${get('hour')}:${get('minute')}`, suffix: lang === 'en' ? (pm ? 'PM' : 'AM') : pm ? 'م' : 'ص' };
+}
+
+/** «السبت 31 أكتوبر 2026» */
+export function gregorianDate(date = new Date(), lang = 'ar') {
+    if (lang === 'en') {
+        return new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz() }).format(date);
+    }
+    return new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz() })
+        .format(date)
+        .replace('،', '');
+}
+
+/** التاريخ الهجري بتقويم أم القرى: «20 جمادى الأولى 1448هـ» */
+export function hijriDate(date = new Date(), lang = 'ar') {
+    try {
+        const locale = lang === 'en' ? 'en-u-ca-islamic-umalqura-nu-latn' : 'ar-SA-u-ca-islamic-umalqura-nu-latn';
+        const parts = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: tz() }).formatToParts(date);
+        const get = (t) => parts.find((p) => p.type === t)?.value ?? '';
+        return lang === 'en' ? `${get('day')} ${get('month')} ${get('year')} AH` : `${get('day')} ${get('month')} ${get('year')}هـ`;
+    } catch (e) {
+        return '';
+    }
+}
+
+/** تحديث كل عناصر الساعة في الصفحة: data-clock-time / data-clock-suffix / data-clock-date / data-clock-hijri */
+export function startClocks(root = document) {
+    const tick = () => {
+        const now = new Date();
+        root.querySelectorAll('[data-clock]').forEach((el) => {
+            const lang = el.dataset.clockLang || 'ar';
+            const { time, suffix } = clockParts(now, lang);
+            el.querySelectorAll('[data-clock-time]').forEach((n) => (n.textContent = time));
+            el.querySelectorAll('[data-clock-suffix]').forEach((n) => (n.textContent = suffix));
+            el.querySelectorAll('[data-clock-date]').forEach((n) => (n.textContent = gregorianDate(now, lang)));
+            el.querySelectorAll('[data-clock-hijri]').forEach((n) => (n.textContent = hijriDate(now, lang)));
+        });
+    };
+    tick();
+    window.addEventListener('clock:tick', tick);
+    // التحديث مع بداية كل دقيقة
+    setTimeout(() => {
+        tick();
+        setInterval(tick, 60_000);
+    }, (60 - new Date().getSeconds()) * 1000 + 50);
+}
+
+/** «د» مختصرة للدقائق في الجداول */
+export function minutesSince(iso, now = Date.now()) {
+    return Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60000));
+}
+
+/** لون مدة الانتظار حسب الدليل: أخضر < 10 د، أصفر 10–20 د، أحمر > 20 د */
+export function waitClass(minutes) {
+    if (minutes > 20) return 'wait-late';
+    if (minutes >= 10) return 'wait-mid';
+    return 'wait-ok';
+}

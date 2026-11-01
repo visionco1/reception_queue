@@ -4,88 +4,90 @@ namespace App\Http\Controllers\Kiosk;
 
 use App\Enums\CustomerType;
 use App\Enums\MessageKey;
+use App\Enums\ViaDetail;
+use App\Exceptions\QueueException;
 use App\Http\Controllers\Controller;
 use App\Models\Bank;
-use App\Models\BankAgent;
 use App\Rules\Mobile;
 use App\Services\QueueService;
 use App\Services\WhatsApp\WhatsAppService;
 use App\Support\Phone;
+use App\Support\WorkHours;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 /** آيباد الاستقبال: العميل يسجل بنفسه ويأخذ رقم انتظار */
 class KioskController extends Controller
 {
-    public function show(string $token)
+    public function show(string $token, QueueService $queue)
     {
+        $banks = Bank::query()->active()->ordered()->get(['id', 'name', 'is_featured']);
+
         return view('kiosk.show', [
             'token' => $token,
-            'banks' => Bank::query()->active()->ordered()
-                ->with(['agents' => fn ($q) => $q->active()->ordered()->select('id', 'bank_id', 'name')])
-                ->get(['id', 'name']),
+            'featured' => ($banks->where('is_featured', true)->isNotEmpty() ? $banks->where('is_featured', true) : $banks)->take(4)->values(),
+            'banks' => $banks,
+            'status' => $this->status($queue),
         ]);
+    }
+
+    /** حالة الانتظار في أعلى الشاشة: عدد المنتظرين والوقت التقريبي */
+    public function state(string $token, QueueService $queue)
+    {
+        return response()->json($this->status($queue))->header('Cache-Control', 'no-store');
     }
 
     public function register(Request $request, QueueService $queue, WhatsAppService $whatsapp, string $token)
     {
+        if (! WorkHours::isOpen()) {
+            throw new QueueException(__('التسجيل متاح في ساعات العمل :hours', ['hours' => WorkHours::label()]), 423);
+        }
+
+        $cc = Phone::countryCode();
         $data = $request->validate([
             'name' => ['required', 'string', 'min:2', 'max:100'],
-            'mobile' => ['required', 'string', 'max:20', new Mobile],
+            // جوال سعودي: 9 أرقام تبدأ بـ 5 (رمز الدولة +966 ثابت)
+            'mobile' => $cc === '966'
+                ? ['required', 'string', 'regex:/^\s*0?5\d{8}\s*$/']
+                : ['required', 'string', 'max:20', new Mobile],
             'customer_type' => ['required', Rule::in(array_keys(CustomerType::queueOptions()))],
-            'bank_id' => ['required', function ($attr, $value, $fail) {
-                if ($value !== 'none' && ! Bank::query()->active()->whereKey($value)->exists()) {
-                    $fail(__('اختر البنك من القائمة'));
-                }
-            }],
-            // وكيل البنك: مطلوب عند اختيار بنك له وكلاء (أو «بدون وكيل»)
-            'agent_id' => ['nullable', function ($attr, $value, $fail) use ($request) {
-                $bankId = $request->input('bank_id');
-                if ($value === 'none' || $bankId === 'none') {
-                    return;
-                }
-                if (! BankAgent::query()->active()->whereKey($value)->where('bank_id', $bankId)->exists()) {
-                    $fail(__('اختر الوكيل من القائمة'));
-                }
-            }],
+            'via' => ['required', Rule::in(['bank', 'other'])],
+            'bank_id' => ['nullable', 'required_if:via,bank', Rule::exists('banks', 'id')->where('is_active', true)],
+            'via_detail' => ['nullable', Rule::enum(ViaDetail::class)],
         ], [
             'name.required' => __('اكتب اسمك'),
-            'name.min' => __('اكتب اسمك'),
-            'customer_type.required' => __('اختر هل أنت بائع أم مشتري'),
-            'bank_id.required' => __('اختر البنك'),
+            'name.min' => __('الاسم حرفين على الأقل'),
+            'mobile.required' => __('اكتب رقم الجوال'),
+            'mobile.regex' => __('رقم الجوال 9 أرقام يبدأ بـ 5'),
+            'customer_type.required' => __('اختر مشتري أو بائع'),
+            'via.required' => __('اختر عن طريق بنك أو أخرى'),
+            'bank_id.required_if' => __('اختر البنك'),
+            'bank_id.exists' => __('اختر البنك من القائمة'),
         ]);
 
-        $bankId = $data['bank_id'] === 'none' ? null : (int) $data['bank_id'];
-        $agentId = ($data['agent_id'] ?? null) && $data['agent_id'] !== 'none' ? (int) $data['agent_id'] : null;
-
-        if ($bankId && ! $agentId && ($data['agent_id'] ?? null) !== 'none'
-            && BankAgent::query()->active()->where('bank_id', $bankId)->exists()) {
-            throw ValidationException::withMessages(['agent_id' => __('اختر وكيل البنك، أو «بدون وكيل»')]);
-        }
+        $bankId = $data['via'] === 'bank' ? (int) $data['bank_id'] : null;
 
         [$visit, $existing] = $queue->registerWalkIn(
             name: trim(preg_replace('/\s+/u', ' ', $data['name'])),
-            mobile: Phone::normalize($data['mobile']),
+            mobile: Phone::normalize(Phone::toAsciiDigits($data['mobile'])),
             type: CustomerType::from($data['customer_type']),
             bankId: $bankId,
-            agentId: $agentId,
+            via: $bankId ? null : ViaDetail::tryFrom($data['via_detail'] ?? ''),
         );
 
-        // ترتيب الطابور بحسب وقت التسجيل (المعرّف التسلسلي للتذكرة يحسم التساوي في الثانية نفسها)
-        $ahead = $queue->waitingQuery()
-            ->where('queue_tickets.id', '<', $visit->ticket->id)
-            ->count();
+        $ahead = $queue->ahead($visit);
 
         return response()->json([
             'ticket_no' => $visit->ticket->ticket_no,
             'type' => $visit->customer_type->value,
             'type_label' => $visit->customer_type->label(),
+            'via' => $visit->bank?->name ?? ($visit->via_detail?->label() ?? __('أخرى')),
+            'via_en' => $visit->bank?->name ?? ($visit->via_detail?->labelEn() ?? 'Other'),
             'first_name' => $visit->customer->firstName(),
             'phone_masked' => Phone::mask($visit->customer->mobile),
-            'ahead' => $visit->status->value === 'waiting' ? $ahead : 0,
+            'ahead' => $ahead,
+            'minutes' => $queue->estimateMinutes($ahead),
             'existing' => $existing,
-            'agent' => $visit->agent?->name,
             'whatsapp' => $whatsapp->messageEnabled(MessageKey::Registered),
         ], $existing ? 200 : 201);
     }
@@ -98,11 +100,23 @@ class KioskController extends Controller
             'short_name' => __('الاستقبال'),
             'start_url' => route('kiosk.show', $token),
             'display' => 'fullscreen',
-            'orientation' => 'any',
-            'background_color' => '#f3f5f3',
-            'theme_color' => '#0f5c4d',
+            'orientation' => 'landscape',
+            'background_color' => '#F7F3EC',
+            'theme_color' => '#1F261F',
             'lang' => 'ar',
             'dir' => 'rtl',
         ])->header('Content-Type', 'application/manifest+json');
+    }
+
+    private function status(QueueService $queue): array
+    {
+        $waiting = $queue->waitingQuery()->count();
+
+        return [
+            'waiting' => $waiting,
+            'minutes' => $queue->estimateMinutes($waiting),
+            'open' => WorkHours::isOpen(),
+            'hours' => WorkHours::label(),
+        ];
     }
 }

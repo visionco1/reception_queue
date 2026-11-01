@@ -30,8 +30,8 @@
                     <div class="hidden lg:block text-xs text-ink-faint px-3 pt-4 pb-1.5 first:pt-0">{{ $group }}</div>
                     @foreach ($visible as [$route, $label, $pattern])
                         <a href="{{ route($route) }}" @class([
-                            'px-3 py-2 rounded-md whitespace-nowrap border-s-2',
-                            'border-deed bg-surface text-ink font-semibold' => request()->routeIs($pattern),
+                            'px-3 py-2 rounded-[10px] whitespace-nowrap border-s-2',
+                            'border-gold bg-surface text-ink font-bold' => request()->routeIs($pattern),
                             'border-transparent text-ink-soft hover:text-ink' => ! request()->routeIs($pattern),
                         ])>{{ $label }}</a>
                     @endforeach

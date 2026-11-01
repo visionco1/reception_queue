@@ -2,10 +2,8 @@
 
 namespace App\Services;
 
-use App\Enums\Channel;
 use App\Enums\ClientSource;
 use App\Enums\CustomerType;
-use App\Enums\VisitStatus;
 use App\Models\AuditLog;
 use App\Models\Customer;
 use App\Models\User;
@@ -15,7 +13,7 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * قاعدة بيانات العملاء الموحدة: البحث برقم الجوال، منع التكرار،
- * وتسجيل العملاء عن بعد كتفاعل بدون رقم انتظار.
+ * وإضافة العملاء عن بُعد إلى قائمة الانتظار برقم.
  */
 class CustomerService
 {
@@ -44,14 +42,14 @@ class CustomerService
     }
 
     /**
-     * إضافة عميل عن بعد (أو تفاعل جديد لعميل موجود). لا يُنشأ رقم انتظار
-     * ولا تُرسل رسائل الطابور، ويُنسب التفاعل للموظف الذي أضافه.
+     * إضافة عميل عن بُعد إلى قائمة الانتظار برقم (أو عميل موجود برقم جديد اليوم).
+     * يُنسب للموظف الذي أضافه، وتصله رسالة التسجيل ورابط متابعة الدور.
      *
      * @return array{0: Visit, 1: bool} الزيارة، وهل كان العميل مسجلًا مسبقًا
      */
     public function addRemote(array $data, User $employee): array
     {
-        return DB::transaction(function () use ($data, $employee) {
+        [$customer, $existed] = DB::transaction(function () use ($data, $employee) {
             $customer = Customer::query()->where('mobile', $data['mobile'])->lockForUpdate()->first();
             $existed = (bool) $customer;
 
@@ -67,31 +65,23 @@ class CustomerService
                 AuditLog::record('customer.updated', $customer, __('تحديث اسم العميل'), ['name' => [$old, $data['name']]]);
             }
 
-            $now = now();
-            $visit = $customer->visits()->create([
-                'channel' => Channel::Remote,
-                'customer_type' => CustomerType::from($data['customer_type']),
-                'client_type_id' => $data['customer_type'] === CustomerType::Other->value ? ($data['client_type_id'] ?? null) : null,
-                'bank_id' => $data['bank_id'] ?? null,
-                'agent_id' => $data['agent_id'] ?? null,
-                'source' => ClientSource::from($data['source']),
-                'status' => VisitStatus::Completed,
-                'employee_id' => $employee->id,
-                'created_by' => $employee->id,
-                'is_returning' => $existed && $customer->visits_count > 0,
-                'notes' => $data['notes'] ?? null,
-                'completed_at' => $now,
-            ]);
-
-            $this->queue->logStatus($visit, null, VisitStatus::Completed, $employee, __('تفاعل عن بعد'));
-            $customer->refreshVisitStats();
-
-            AuditLog::record('visit.remote_created', $visit, __(':user أضاف تفاعلًا عن بعد للعميل :name', [
-                'user' => $employee->name, 'name' => $customer->name,
-            ]));
-
-            return [$visit, $existed];
+            return [$customer, $existed];
         });
+
+        $type = CustomerType::from($data['customer_type']);
+        $bankId = $type->isParty() ? ($data['bank_id'] ?? null) : null;
+
+        $visit = $this->queue->enqueueRemote($customer, [
+            'customer_type' => $type,
+            'client_type_id' => $type === CustomerType::Other ? ($data['client_type_id'] ?? null) : null,
+            'bank_id' => $bankId,
+            'via_detail' => $bankId || ! $type->isParty() ? null : ($data['via_detail'] ?? null),
+            'agent_id' => $bankId ? ($data['agent_id'] ?? null) : null,
+            'source' => ClientSource::from($data['source']),
+            'notes' => $data['notes'] ?? null,
+        ], $employee);
+
+        return [$visit, $existed];
     }
 
     /** تعديل البيانات الأساسية للعميل مع تسجيل القيم القديمة والجديدة */

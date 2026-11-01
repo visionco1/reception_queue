@@ -4,6 +4,7 @@ import kiosk from './kiosk';
 import display from './display';
 import staffDashboard from './staff';
 import remoteForm from './remote';
+import { startClocks } from './lib';
 
 Alpine.plugin(focus);
 Alpine.data('kiosk', kiosk);
@@ -13,3 +14,4 @@ Alpine.data('remoteForm', remoteForm);
 
 window.Alpine = Alpine;
 Alpine.start();
+startClocks();

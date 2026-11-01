@@ -1,18 +1,19 @@
-{{-- إضافة عميل عن بعد: يبدأ برقم الجوال لمنع تكرار السجل --}}
+{{-- إضافة عميل عن بُعد إلى قائمة الانتظار برقم: يبدأ برقم الجوال لمنع تكرار السجل --}}
 <div x-data="remoteForm({ lookupUrl: @js(route('staff.lookup')), storeUrl: @js(route('staff.remote.store')), agents: @js($remoteAgents) })"
      @open-remote.window="show($event.detail || {})"
      @keydown.escape.window="open && close()">
     <div x-show="open" x-cloak class="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-ink/40 p-4 overflow-y-auto" @click.self="close()">
         <div class="panel w-full max-w-lg shadow-xl" role="dialog" aria-modal="true" aria-labelledby="remote-title" x-trap.noscroll="open">
             <div class="px-6 py-4 border-b border-line flex items-center justify-between">
-                <h2 id="remote-title" class="font-display font-bold text-lg">{{ __('إضافة عميل عن بُعد') }}</h2>
+                <h2 id="remote-title" class="font-display font-bold text-lg">{{ __('إضافة عميل عن بُعد لقائمة الانتظار') }}</h2>
                 <button type="button" class="text-ink-faint hover:text-ink text-xl leading-none" @click="close()" aria-label="{{ __('إغلاق') }}">✕</button>
             </div>
 
             <template x-if="saved">
                 <div class="p-6 text-center space-y-4">
+                    <div class="mx-auto inline-block rounded-[16px] bg-olive px-8 py-4"><span class="ticket-code text-gold text-5xl" x-text="saved.ticket_no"></span></div>
                     <p class="font-semibold text-lg" x-text="saved.message"></p>
-                    <p class="text-ink-faint text-sm">{{ __('سُجّل كتفاعل عن بعد بدون رقم انتظار، ونُسب إليك.') }}</p>
+                    <p class="text-ink-faint text-sm">{{ __('دخل قائمة الانتظار بالأقدمية، ووصلته رسالة واتساب برقمه ورابط متابعة الدور.') }}</p>
                     <div class="flex justify-center gap-2">
                         <a :href="saved.customer_url" class="btn btn-quiet">{{ __('فتح سجل العميل') }}</a>
                         <button type="button" class="btn btn-primary" @click="reset(); $nextTick(() => $refs.mobile.focus())">{{ __('إضافة عميل آخر') }}</button>
@@ -35,7 +36,7 @@
                     <p class="font-semibold">{{ __('هذا الرقم مسجل مسبقًا') }}: <span x-text="found?.name"></span></p>
                     <p class="text-ink-soft mt-0.5">
                         <span x-text="found ? visitsLabel(found.visits_count) : ''"></span><span x-show="found?.last_visit">، {{ __('آخرها') }} <span x-text="found?.last_visit"></span></span>.
-                        {{ __('سيُضاف تفاعل جديد لنفس السجل بدل إنشاء عميل مكرر.') }}
+                        {{ __('سيُضاف رقم جديد لنفس السجل بدل إنشاء عميل مكرر.') }}
                     </p>
                     <a x-show="found?.url" :href="found?.url" class="inline-block mt-1.5 text-deed font-semibold hover:underline">{{ __('عرض سجل العميل') }}</a>
                 </div>
@@ -90,14 +91,24 @@
                         </select>
                         <p class="field-error" x-show="errors.source" x-text="errors.source"></p>
                     </div>
-                    <div>
-                        <label for="r-bank" class="field-label">{{ __('البنك') }}</label>
+                    <div x-show="form.customer_type !== 'other'">
+                        <label for="r-bank" class="field-label">{{ __('الجهة') }}</label>
                         <select id="r-bank" x-model="form.bank_id" @change="form.agent_id = ''" class="field">
-                            <option value="">{{ __('بدون بنك') }}</option>
+                            <option value="">{{ __('أخرى (ليس عن طريق بنك)') }}</option>
                             @foreach ($remoteBanks as $bank)
-                                <option value="{{ $bank->id }}">{{ $bank->name }}</option>
+                                <option value="{{ $bank->id }}">{{ __('بنك') }} · {{ $bank->name }}</option>
                             @endforeach
                         </select>
+                    </div>
+                </div>
+
+                <div x-show="form.customer_type !== 'other' && !form.bank_id" x-cloak>
+                    <span class="field-label">{{ __('تفصيل «أخرى» (اختياري)') }}</span>
+                    <div class="seg">
+                        <button type="button" :class="form.via_detail === '' && 'is-on'" @click="form.via_detail = ''">{{ __('غير محدد') }}</button>
+                        @foreach (\App\Enums\ViaDetail::options() as $value => $label)
+                            <button type="button" :class="form.via_detail === '{{ $value }}' && 'is-on'" @click="form.via_detail = '{{ $value }}'">{{ $label }}</button>
+                        @endforeach
                     </div>
                 </div>
 
@@ -121,7 +132,7 @@
 
                 <div class="flex justify-end gap-2 pt-2">
                     <button type="button" class="btn btn-quiet" @click="close()">{{ __('إلغاء') }}</button>
-                    <button class="btn btn-primary" :disabled="saving">{{ __('حفظ التفاعل') }}</button>
+                    <button class="btn btn-primary" :disabled="saving">{{ __('إضافة لقائمة الانتظار') }}</button>
                 </div>
             </form>
         </div>

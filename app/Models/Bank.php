@@ -8,11 +8,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Bank extends Model
 {
-    protected $fillable = ['name', 'is_active', 'sort_order'];
+    protected $fillable = ['name', 'is_active', 'is_featured', 'sort_order'];
 
     protected function casts(): array
     {
-        return ['is_active' => 'boolean'];
+        return ['is_active' => 'boolean', 'is_featured' => 'boolean'];
     }
 
     public function scopeActive(Builder $q): Builder

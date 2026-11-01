@@ -29,7 +29,8 @@ class DatabaseSeeder extends Seeder
             'البنك السعودي للاستثمار', 'بنك الخليج الدولي',
         ];
         foreach ($banks as $i => $name) {
-            Bank::firstOrCreate(['name' => $name], ['sort_order' => $i + 1]);
+            // أول 4 بنوك تظهر على الآيباد، والباقي من «بنك آخر»
+            Bank::firstOrCreate(['name' => $name], ['sort_order' => $i + 1, 'is_featured' => $i < 4]);
         }
 
         // أنواع العملاء الأخرى للعملاء عن بعد (يعدلها مدير النظام)

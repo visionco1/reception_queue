@@ -25,7 +25,7 @@ class ExportController extends Controller
         $format = $this->format($request);
         $headers = [
             __('رقم الزيارة'), __('التاريخ'), __('وقت التسجيل'), __('العميل'), __('الجوال'), __('نوع التسجيل'),
-            __('النوع'), __('البنك'), __('وكيل البنك'), __('مرتبط بـ'), __('مصدر العميل'), __('رقم الانتظار'), __('الحالة'), __('الموظف'), __('المكتب'),
+            __('النوع'), __('الجهة'), __('وكيل البنك'), __('مرتبط بـ'), __('مصدر العميل'), __('رقم الانتظار'), __('الحالة'), __('نتيجة الصفقة'), __('الموظف'), __('المكتب'),
             __('وقت الاستدعاء'), __('وقت إنهاء الخدمة'), __('مدة الانتظار (دقيقة)'), __('مدة الخدمة (دقيقة)'),
             __('عميل متكرر'), __('ملاحظات'),
         ];
@@ -45,7 +45,7 @@ class ExportController extends Controller
                         Phone::format($v->customer?->mobile),
                         $v->channel->label(),
                         $v->typeLabel(),
-                        $v->bank?->name ?? '',
+                        $v->viaLabel(),
                         $v->agent?->name ?? '',
                         $v->deal ? $v->deal->visits->reject(fn ($o) => $o->id === $v->id)
                             ->map(fn ($o) => trim(($o->ticket?->ticket_no ?? '').' '.$o->customer->name).' ('.$o->typeLabel().')')
@@ -53,6 +53,7 @@ class ExportController extends Controller
                         $v->source?->label() ?? '',
                         $v->ticket?->ticket_no ?? '',
                         $v->status->label(),
+                        $v->outcome?->label() ?? '',
                         $v->employee?->name ?? '',
                         $v->desk?->number ?? '',
                         $v->called_at?->format('H:i') ?? '',

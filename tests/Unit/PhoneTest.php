@@ -24,6 +24,6 @@ class PhoneTest extends TestCase
     public function test_formats_and_masks_for_display(): void
     {
         $this->assertSame('055 123 4567', Phone::format('966551234567'));
-        $this->assertSame('05• ••• 4567', Phone::mask('966551234567'));
+        $this->assertSame('05X XXX 4567', Phone::mask('966551234567'));
     }
 }

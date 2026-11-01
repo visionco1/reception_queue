@@ -39,7 +39,7 @@ class Customer extends Model
         return (string) str($this->name)->trim()->explode(' ')->first();
     }
 
-    /** اسم مختصر لقوائم الانتظار: "محمد أ." */
+    /** الاسم على شاشة العرض: الاسم الأول + أول حرف من الثاني «عبدالله م.» */
     public function shortName(): string
     {
         $parts = preg_split('/\s+/u', trim($this->name)) ?: [];

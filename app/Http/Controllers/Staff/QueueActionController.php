@@ -2,12 +2,15 @@
 
 namespace App\Http\Controllers\Staff;
 
+use App\Enums\Outcome;
 use App\Enums\VisitStatus;
 use App\Http\Controllers\Controller;
+use App\Models\Desk;
 use App\Models\Visit;
 use App\Support\Phone;
 use App\Services\QueueService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 /** أزرار الطابور في لوحة الموظف (طلبات JSON) */
 class QueueActionController extends Controller
@@ -45,17 +48,45 @@ class QueueActionController extends Controller
 
     public function complete(Request $request, Visit $visit)
     {
-        $data = $request->validate(['notes' => ['nullable', 'string', 'max:2000']]);
-        $this->queue->complete($visit, $request->user(), $data['notes'] ?? null);
+        $data = $request->validate([
+            'notes' => ['nullable', 'string', 'max:2000'],
+            'outcome' => ['nullable', Rule::enum(Outcome::class)],
+        ]);
+        $outcome = Outcome::tryFrom($data['outcome'] ?? '') ?? Outcome::Completed;
+        $this->queue->complete($visit, $request->user(), $data['notes'] ?? null, $outcome);
 
-        return response()->json(['message' => __('انتهت الخدمة. يمكنك أخذ العميل التالي.')]);
+        return response()->json(['message' => __('انتهت الخدمة (:outcome). يمكنك نداء العميل التالي.', ['outcome' => $outcome->label()])]);
     }
 
     public function noShow(Request $request, Visit $visit)
     {
-        $this->queue->noShow($visit, $request->user());
+        $requeued = $this->queue->noShow($visit, $request->user());
 
-        return response()->json(['message' => __('سُجّل العميل: لم يحضر')]);
+        return response()->json(['message' => $requeued
+            ? __(':ticket لم يحضر، وأُعيد لآخر قائمة الانتظار', ['ticket' => $visit->ticketNo()])
+            : __(':ticket لم يحضر للمرة الثانية، وأُلغيت التذكرة', ['ticket' => $visit->ticketNo()])]);
+    }
+
+    /** تحويل عميلي الحالي لمكتب آخر */
+    public function transfer(Request $request, Visit $visit)
+    {
+        $data = $request->validate(['desk_id' => ['required', Rule::exists('desks', 'id')->where('is_active', true)]]);
+        $desk = Desk::findOrFail($data['desk_id']);
+        $this->queue->transfer($visit, $request->user(), $desk);
+
+        return response()->json(['message' => __('حُوّل :ticket إلى مكتب :desk', ['ticket' => $visit->ticketNo(), 'desk' => $desk->number])]);
+    }
+
+    /** حذف عميل لم يكمل طلبه */
+    public function destroy(Request $request, Visit $visit)
+    {
+        $label = $visit->ticketNo() ?? $visit->customer->name;
+        $this->queue->delete($visit, $request->user());
+        $message = __('حُذف :who', ['who' => $label]);
+
+        return $request->expectsJson()
+            ? response()->json(['message' => $message])
+            : back()->with('status', $message);
     }
 
     public function release(Request $request, Visit $visit)
@@ -128,18 +159,29 @@ class QueueActionController extends Controller
         return response()->json(['message' => __('فُك ربط :who', ['who' => $visit->ticketNo() ?? $visit->customer->name])]);
     }
 
-    /** تصحيح وكيل البنك لعميلي الحالي (إذا اختار العميل وكيلًا خطأ على الآيباد) */
+    /** الموظف يحدد بنك العميل ووكيل البنك أثناء خدمته */
     public function agent(Request $request, Visit $visit)
     {
         abort_unless($visit->employee_id === $request->user()->id && in_array($visit->status->value, VisitStatus::active(), true), 403);
+        $bankId = $request->has('bank_id') ? ($request->input('bank_id') ?: null) : $visit->bank_id;
+
         $data = $request->validate([
-            'agent_id' => ['nullable', \Illuminate\Validation\Rule::exists('bank_agents', 'id')->where('bank_id', $visit->bank_id ?? 0)],
+            'bank_id' => ['nullable', Rule::exists('banks', 'id')],
+            'agent_id' => ['nullable', Rule::exists('bank_agents', 'id')->where('bank_id', $bankId ?? 0)],
         ], ['agent_id.exists' => __('الوكيل لا يتبع بنك العميل')]);
 
-        $old = $visit->agent?->name;
-        $visit->update(['agent_id' => $data['agent_id'] ?? null]);
-        \App\Models\AuditLog::record('visit.agent_changed', $visit, __('تغيير وكيل البنك'), ['agent' => [$old, $visit->fresh()->agent?->name]]);
+        $before = ['bank' => $visit->bank?->name, 'agent' => $visit->agent?->name];
+        $visit->update([
+            'bank_id' => $bankId,
+            'via_detail' => $bankId ? null : $visit->via_detail,
+            'agent_id' => $bankId ? ($data['agent_id'] ?? null) : null,
+        ]);
+        $visit->refresh()->load('bank', 'agent');
+        \App\Models\AuditLog::record('visit.agent_changed', $visit, __('تحديد بنك ووكيل العميل'), [
+            'bank' => [$before['bank'], $visit->bank?->name],
+            'agent' => [$before['agent'], $visit->agent?->name],
+        ]);
 
-        return response()->json(['message' => __('حُفظ وكيل البنك')]);
+        return response()->json(['message' => __('حُفظ البنك ووكيل البنك')]);
     }
 }

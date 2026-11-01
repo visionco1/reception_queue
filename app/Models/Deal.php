@@ -9,7 +9,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /** صفقة تربط البائع بالمشتري (وكيل البنك نفسه قد يتابع صفقات كثيرة) */
 class Deal extends Model
 {
-    protected $fillable = ['bank_id', 'agent_id', 'created_by'];
+    protected $fillable = ['bank_id', 'agent_id', 'outcome', 'created_by'];
+
+    protected function casts(): array
+    {
+        return ['outcome' => \App\Enums\Outcome::class];
+    }
 
     public function visits(): HasMany
     {

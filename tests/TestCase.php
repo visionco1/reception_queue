@@ -37,11 +37,20 @@ abstract class TestCase extends BaseTestCase
 
     protected function registerAtKiosk(array $overrides = []): \Illuminate\Testing\TestResponse
     {
-        return $this->postJson('/kiosk/kiosk-secret/register', array_merge([
+        $data = array_merge([
             'name' => 'محمد أحمد',
             'mobile' => '0551234567',
             'customer_type' => 'buyer',
+            'via' => 'bank',
             'bank_id' => (string) Bank::first()->id,
-        ], $overrides));
+        ], $overrides);
+
+        // «بدون بنك» في الاختبارات القديمة = «أخرى» في التصميم الجديد
+        if (($data['bank_id'] ?? null) === 'none') {
+            $data['via'] = 'other';
+            $data['bank_id'] = null;
+        }
+
+        return $this->postJson('/kiosk/kiosk-secret/register', $data);
     }
 }

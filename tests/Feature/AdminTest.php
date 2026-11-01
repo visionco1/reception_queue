@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\Role;
+use App\Models\Bank;
 use App\Models\User;
 use App\Models\Visit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -49,7 +50,8 @@ class AdminTest extends TestCase
         $csv = $this->actingAs($admin)->get('/admin/export/visits?format=csv')->streamedContent();
         $this->assertStringStartsWith("\xEF\xBB\xBF", $csv);
         $this->assertStringContainsString('محمد أحمد', $csv);
-        $this->assertStringContainsString('M001', $csv);
+        $this->assertStringContainsString('M-001', $csv);
+        $this->assertStringContainsString('بنك · مصرف الراجحي', $csv);
 
         $customers = $this->actingAs($admin)->get('/admin/export/customers?format=csv')->streamedContent();
         $this->assertStringContainsString('055 123 4567', $customers);
@@ -96,19 +98,31 @@ class AdminTest extends TestCase
         $this->actingAs($admin)->post('/admin/banks', ['name' => 'بنك البلاد'])->assertRedirect();
         $this->actingAs($admin)->post('/admin/desks', ['number' => '9'])->assertRedirect();
 
-        $this->actingAs($admin)->put('/admin/settings', [
-            'company_name' => 'مكتب التوثيق', 'ticket_prefix_buyer' => 'b', 'ticket_prefix_seller' => 'b', 'ticket_digits' => 3,
-            'kiosk_reset_seconds' => 15, 'country_code' => '966', 'employee_search_scope' => 'all',
-            'display_bg' => '#000000', 'display_primary' => '#ffffff', 'display_accent' => '#ffcc00', 'display_recent_count' => 5,
-        ])->assertSessionHasErrors('ticket_prefix_buyer');
+        $settings = [
+            'company_name' => 'شركة سلطان الهيضل', 'ticket_prefix_buyer' => 'b', 'ticket_prefix_seller' => 'b', 'ticket_prefix_other' => 'g',
+            'ticket_digits' => 3, 'kiosk_reset_seconds' => 10, 'default_service_minutes' => 15, 'country_code' => '966',
+            'employee_search_scope' => 'all', 'display_mode' => 'current', 'display_idle_seconds' => 60, 'display_recent_count' => 5,
+            'ticker_messages' => "أهلًا بكم\nيرجى إحضار الهوية", 'work_start' => '', 'work_end' => '',
+        ];
+        $this->actingAs($admin)->put('/admin/settings', $settings)->assertSessionHasErrors('ticket_prefix_buyer');
+        $this->actingAs($admin)->put('/admin/settings', ['work_start' => '08:00'] + $settings)->assertSessionHasErrors('work_end');
 
-        $this->actingAs($admin)->put('/admin/settings', [
-            'company_name' => 'مكتب التوثيق', 'ticket_prefix_buyer' => 'p', 'ticket_prefix_seller' => 's', 'ticket_digits' => 3,
-            'kiosk_reset_seconds' => 15, 'country_code' => '966', 'employee_search_scope' => 'all',
-            'display_bg' => '#000000', 'display_primary' => '#ffffff', 'display_accent' => '#ffcc00', 'display_recent_count' => 5,
-        ])->assertSessionHasNoErrors();
+        $this->actingAs($admin)->put('/admin/settings', ['ticket_prefix_buyer' => 'p', 'ticket_prefix_seller' => 's', 'display_mode' => 'offices'] + $settings)
+            ->assertSessionHasNoErrors();
         $this->assertSame('P', setting('ticket_prefix_buyer'));
-        $this->registerAtKiosk()->assertJsonPath('ticket_no', 'P001');
+        $this->assertSame('offices', setting('display_mode'));
+        $this->registerAtKiosk()->assertJsonPath('ticket_no', 'P-001');
+        $this->getJson('/display/display-secret/feed')->assertJsonPath('mode', 'offices')->assertJsonPath('ticker', ['أهلًا بكم', 'يرجى إحضار الهوية']);
+
+        // 4 بنوك فقط تظهر على الآيباد
+        foreach (Bank::query()->get() as $bank) {
+            $bank->update(['is_featured' => true]);
+        }
+        Bank::create(['name' => 'بنك ثالث', 'is_featured' => true]);
+        Bank::create(['name' => 'بنك رابع', 'is_featured' => true]);
+        $fifth = Bank::create(['name' => 'بنك خامس']);
+        $this->actingAs($admin)->put("/admin/banks/{$fifth->id}", ['name' => 'بنك خامس', 'is_active' => '1', 'is_featured' => '1'])
+            ->assertSessionHasErrors('is_featured');
     }
 
     public function test_admin_cannot_lock_themselves_out(): void

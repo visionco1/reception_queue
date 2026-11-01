@@ -33,10 +33,13 @@ class QueueFlowTest extends TestCase
             $this->actingAs($user)->getJson('/staff/state')
                 ->assertOk()
                 ->assertJsonCount(1, 'waiting')
-                ->assertJsonPath('waiting.0.ticket_no', 'M001')
-                ->assertJsonPath('waiting.0.name', 'محمد أ.')
+                ->assertJsonPath('waiting.0.ticket_no', 'M-001')
+                ->assertJsonPath('waiting.0.name', 'محمد أحمد')
+                ->assertJsonPath('waiting.0.phone', '05X XXX 4567')
                 ->assertJsonPath('waiting.0.type_label', 'مشتري')
-                ->assertJsonPath('waiting.0.bank', 'مصرف الراجحي');
+                ->assertJsonPath('waiting.0.via', 'بنك · مصرف الراجحي')
+                ->assertJsonPath('counts.bank', 1)
+                ->assertJsonPath('stats.waiting', 1);
         }
     }
 
@@ -78,19 +81,21 @@ class QueueFlowTest extends TestCase
         $this->registerAtKiosk();
         $visit = Visit::sole();
 
-        $this->getJson('/display/display-secret/feed')->assertOk()->assertJsonPath('current', null)->assertJsonPath('waiting', 1);
+        $this->getJson('/display/display-secret/feed')->assertOk()->assertJsonPath('current', null)
+            ->assertJsonPath('waiting.total', 1)->assertJsonPath('waiting.buyer', 1);
 
         $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/take")->assertOk();
 
         $this->getJson('/display/display-secret/feed')
             ->assertOk()
-            ->assertJsonPath('current.ticket_no', 'M001')
+            ->assertJsonPath('current.tickets', ['M-001'])
             ->assertJsonPath('current.desk', '3')
-            ->assertJsonPath('waiting', 0);
+            ->assertJsonPath('current.names', ['محمد أ.'])
+            ->assertJsonPath('waiting.total', 0)
+            ->assertJsonPath('offices.2.tickets', ['M-001']);
 
         $called = WhatsappLog::where('message_key', 'called')->sole();
-        $this->assertStringContainsString('مكتب 3', $called->body);
-        $this->assertStringContainsString('M001', $called->body);
+        $this->assertSame('حان دورك، تفضّل إلى مكتب 3.', $called->body);
         $this->assertSame('called', $visit->fresh()->status->value);
     }
 
@@ -105,6 +110,7 @@ class QueueFlowTest extends TestCase
         $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/start")->assertOk();
         $this->travel(12)->minutes();
         $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/complete", ['notes' => 'تم توقيع العقد'])->assertOk();
+        $this->assertSame('completed', $visit->fresh()->outcome->value);
 
         $visit->refresh();
         $this->assertSame('completed', $visit->status->value);
@@ -174,20 +180,118 @@ class QueueFlowTest extends TestCase
         $this->actingAs($b)->postJson("/staff/visits/{$visit->id}/no-show")->assertStatus(409);
     }
 
-    public function test_no_show_and_recall(): void
+    public function test_no_show_moves_to_end_of_queue_once_then_cancels_the_ticket(): void
+    {
+        $employee = $this->employee(1);
+        $this->registerAtKiosk(['mobile' => '0550000001']);
+        $this->registerAtKiosk(['mobile' => '0550000002']);
+        [$first, $second] = Visit::orderBy('id')->get();
+
+        $this->actingAs($employee)->postJson("/staff/visits/{$first->id}/take")->assertOk();
+        $this->actingAs($employee)->postJson("/staff/visits/{$first->id}/recall")->assertOk();
+        $this->assertSame(2, DisplayCall::count());
+        $this->getJson('/display/display-secret/feed')->assertJsonPath('current.recall', true);
+
+        // أول مرة: يعود لآخر الدور
+        $this->travel(1)->minutes();
+        $this->actingAs($employee)->postJson("/staff/visits/{$first->id}/no-show")->assertOk()
+            ->assertJsonPath('message', 'M-001 لم يحضر، وأُعيد لآخر قائمة الانتظار');
+        $this->assertSame('waiting', $first->fresh()->status->value);
+        $this->assertSame(1, $first->fresh()->ticket->no_show_count);
+        $this->assertSame([$second->id, $first->id], app(QueueService::class)->waitingQuery()->pluck('visits.id')->all());
+
+        // المرة الثانية: تُلغى التذكرة
+        $this->actingAs($employee)->postJson("/staff/visits/{$first->id}/take")->assertOk();
+        $this->actingAs($employee)->postJson("/staff/visits/{$first->id}/no-show")->assertOk()
+            ->assertJsonPath('message', 'M-001 لم يحضر للمرة الثانية، وأُلغيت التذكرة');
+        $this->assertSame('no_show', $first->fresh()->status->value);
+        $this->assertSame(0, WhatsappLog::where('message_key', 'thanks')->count());
+    }
+
+    public function test_finishing_records_the_deal_outcome(): void
     {
         $employee = $this->employee(1);
         $this->registerAtKiosk();
         $visit = Visit::sole();
 
         $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/take")->assertOk();
-        $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/recall")->assertOk();
-        $this->assertSame(2, DisplayCall::count());
-        $this->getJson('/display/display-secret/feed')->assertJsonPath('current.recall', true);
+        $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/complete", ['outcome' => 'missing_docs'])
+            ->assertOk()->assertJsonPath('message', 'انتهت الخدمة (ناقصة أوراق). يمكنك نداء العميل التالي.');
+        $this->assertSame('missing_docs', $visit->fresh()->outcome->value);
 
-        $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/no-show")->assertOk();
-        $this->assertSame('no_show', $visit->fresh()->status->value);
-        $this->assertSame(0, WhatsappLog::where('message_key', 'thanks')->count());
+        $this->actingAs($employee)->postJson("/staff/visits/{$visit->id}/complete", ['outcome' => 'bad'])->assertStatus(422);
+    }
+
+    public function test_transfer_to_another_desk_keeps_seniority_and_only_that_desk_can_call(): void
+    {
+        $a = $this->employee(1);
+        $b = $this->employee(2);
+        $c = $this->employee(3);
+        $this->registerAtKiosk(['mobile' => '0550000001']);
+        $this->registerAtKiosk(['mobile' => '0550000002']);
+        [$first] = Visit::orderBy('id')->get();
+        $desk2 = \App\Models\Desk::where('number', '2')->first();
+
+        $this->actingAs($a)->postJson("/staff/visits/{$first->id}/take")->assertOk();
+        $this->actingAs($a)->postJson("/staff/visits/{$first->id}/transfer", ['desk_id' => $desk2->id])
+            ->assertOk()->assertJsonPath('message', 'حُوّل M-001 إلى مكتب 2');
+
+        $first->refresh();
+        $this->assertSame('waiting', $first->status->value);
+        $this->assertSame($desk2->id, $first->assigned_desk_id);
+
+        $this->actingAs($b)->getJson('/staff/state')->assertJsonPath('waiting.0.ticket_no', 'M-001')->assertJsonPath('waiting.0.assigned_to_me', true);
+        $this->actingAs($c)->postJson("/staff/visits/{$first->id}/take")->assertStatus(409);
+        $this->actingAs($b)->postJson("/staff/visits/{$first->id}/take")->assertOk();
+        $this->assertNull($first->fresh()->assigned_desk_id);
+        $this->getJson('/display/display-secret/feed')->assertJsonPath('current.desk', '2');
+    }
+
+    public function test_incomplete_customer_can_be_deleted_but_not_a_completed_service(): void
+    {
+        $employee = $this->employee(1);
+        $this->registerAtKiosk(['mobile' => '0550000001']);
+        $this->registerAtKiosk(['mobile' => '0550000002']);
+        [$first, $second] = Visit::orderBy('id')->get();
+
+        $this->actingAs($employee)->deleteJson("/staff/visits/{$first->id}")->assertOk()->assertJsonPath('message', 'حُذف M-001');
+        $this->assertModelMissing($first);
+        $this->assertSame(1, \App\Models\Customer::count());
+        $this->assertDatabaseHas('audit_logs', ['action' => 'visit.deleted']);
+
+        $this->actingAs($employee)->postJson("/staff/visits/{$second->id}/take")->assertOk();
+        $this->actingAs($employee)->postJson("/staff/visits/{$second->id}/complete")->assertOk();
+        $this->actingAs($employee)->deleteJson("/staff/visits/{$second->id}")->assertStatus(409);
+    }
+
+    public function test_today_list_shows_all_of_todays_tickets(): void
+    {
+        $employee = $this->employee(1);
+        $this->registerAtKiosk(['mobile' => '0550000001']);
+        $this->registerAtKiosk(['mobile' => '0550000002', 'customer_type' => 'seller']);
+
+        $this->actingAs($employee)->get('/staff/today')->assertOk()
+            ->assertSee('قائمة انتظار اليوم')->assertSee('M-001')->assertSee('S-001');
+        $this->actingAs($employee)->get('/staff/today?status=completed')->assertOk()->assertDontSee('S-001');
+    }
+
+    public function test_estimate_uses_average_service_today_and_working_desks(): void
+    {
+        $queue = app(QueueService::class);
+        $this->assertSame(30, $queue->estimateMinutes(2)); // 15 دقيقة افتراضيًا ومكتب واحد
+
+        $a = $this->employee(1);
+        $b = $this->employee(2);
+        $a->forceFill(['current_desk_id' => $a->desk_id, 'last_login_at' => now()])->save();
+        $b->forceFill(['current_desk_id' => $b->desk_id, 'last_login_at' => now()])->save();
+        $this->registerAtKiosk();
+        $visit = Visit::sole();
+        $this->actingAs($a)->postJson("/staff/visits/{$visit->id}/take");
+        $this->travel(10)->minutes();
+        $this->actingAs($a)->postJson("/staff/visits/{$visit->id}/complete");
+
+        // 4 عملاء × 10 دقائق ÷ مكتبين
+        $this->assertSame(20, $queue->estimateMinutes(4));
     }
 
     public function test_waiting_customer_can_be_cancelled_once(): void

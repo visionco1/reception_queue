@@ -15,7 +15,7 @@ use App\Support\Phone;
  */
 class WhatsAppService
 {
-    public const PLACEHOLDERS = ['name', 'first_name', 'ticket', 'desk', 'ahead', 'company'];
+    public const PLACEHOLDERS = ['name', 'first_name', 'ticket', 'desk', 'ahead', 'company', 'link'];
 
     public function driver(): WhatsAppDriver
     {
@@ -35,14 +35,15 @@ class WhatsAppService
         return $this->isEnabled() && (bool) setting("wa_{$key->value}_enabled", false);
     }
 
-    /** إرسال رسالة من رحلة العميل الحضوري (لا تُرسل رسائل الطابور للعميل عن بعد) */
+    /** إرسال رسالة من رحلة العميل في قائمة الانتظار (لمن له رقم انتظار فقط) */
     public function notify(Visit $visit, MessageKey $key, array $extra = []): ?WhatsappLog
     {
-        if (! $visit->isInPerson() || ! $this->messageEnabled($key)) {
+        $visit->loadMissing('customer', 'ticket', 'desk');
+
+        if (! $visit->ticket || ! $this->messageEnabled($key)) {
             return null;
         }
 
-        $visit->loadMissing('customer', 'ticket', 'desk');
         $vars = $this->variables($visit, $extra);
 
         return $this->queue(
@@ -77,6 +78,7 @@ class WhatsAppService
             'desk' => $visit->ticket?->desk_label ?? $visit->desk?->number ?? '',
             'ahead' => '',
             'company' => (string) setting('company_name'),
+            'link' => $visit->track_token ? $visit->trackUrl() : '',
         ], $extra);
     }
 

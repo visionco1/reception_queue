@@ -1,12 +1,12 @@
 import { api, asciiDigits, visitsLabel } from './lib';
 
 /**
- * إضافة عميل عن بعد: يبدأ الموظف برقم الجوال، فإن كان العميل مسجلًا
- * يظهر تنبيه بسجله بدل إنشاء سجل مكرر، ثم يحفظ التفاعل بدون رقم انتظار.
+ * إضافة عميل عن بُعد: يبدأ الموظف برقم الجوال، فإن كان العميل مسجلًا
+ * يظهر تنبيه بسجله بدل إنشاء سجل مكرر، ثم يدخل قائمة الانتظار برقم.
  */
 export default (config) => ({
     open: false,
-    form: { mobile: '', name: '', customer_type: '', client_type_id: '', bank_id: '', agent_id: '', source: '', notes: '' },
+    form: { mobile: '', name: '', customer_type: '', client_type_id: '', bank_id: '', via_detail: '', agent_id: '', source: '', notes: '' },
     found: null,
     looked: false,
     looking: false,
@@ -34,7 +34,7 @@ export default (config) => ({
     },
 
     reset() {
-        this.form = { mobile: '', name: '', customer_type: '', client_type_id: '', bank_id: '', agent_id: '', source: '', notes: '' };
+        this.form = { mobile: '', name: '', customer_type: '', client_type_id: '', bank_id: '', via_detail: '', agent_id: '', source: '', notes: '' };
         this.found = null;
         this.looked = false;
         this.errors = {};

@@ -16,6 +16,7 @@
         "@alpinejs/focus": "^3.17.4",
         "@fontsource-variable/noto-kufi-arabic": "^5.0.0",
         "@fontsource/ibm-plex-sans-arabic": "^5.0.0",
+        "@fontsource/inter": "^5.2.5",
         "alpinejs": "^3.14.0"
     }
 }

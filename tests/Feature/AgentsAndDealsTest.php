@@ -27,36 +27,26 @@ class AgentsAndDealsTest extends TestCase
         $this->agent = BankAgent::create(['bank_id' => Bank::first()->id, 'name' => 'خالد المندوب']);
     }
 
+    /** التسجيل من الآيباد ثم الوكيل كما يحدده الموظف (الوكيل لا يُختار على الآيباد) */
     private function register(string $mobile, string $type, ?string $agent = null): Visit
     {
-        $this->registerAtKiosk(['mobile' => $mobile, 'customer_type' => $type, 'agent_id' => $agent ?? (string) $this->agent->id])->assertCreated();
+        $this->registerAtKiosk(['mobile' => $mobile, 'customer_type' => $type])->assertCreated();
+        $visit = Visit::latest('id')->first();
+        $visit->update(['agent_id' => $agent === 'none' ? null : ($agent ?? $this->agent->id)]);
 
-        return Visit::latest('id')->first();
+        return $visit->fresh();
     }
 
-    public function test_kiosk_requires_an_agent_choice_when_the_bank_has_agents(): void
+    public function test_kiosk_does_not_ask_for_the_agent(): void
     {
-        $this->registerAtKiosk()->assertUnprocessable()->assertJsonValidationErrors('agent_id');
-
-        $this->registerAtKiosk(['agent_id' => (string) $this->agent->id])->assertCreated()->assertJsonPath('agent', 'خالد المندوب');
-        $this->assertSame($this->agent->id, Visit::sole()->agent_id);
-
-        $this->registerAtKiosk(['mobile' => '0550000009', 'agent_id' => 'none'])->assertCreated()->assertJsonPath('agent', null);
-    }
-
-    public function test_kiosk_rejects_agent_of_another_bank_and_banks_without_agents_need_none(): void
-    {
-        $other = Bank::where('name', 'البنك الأهلي السعودي')->first();
-        $this->registerAtKiosk(['bank_id' => (string) $other->id, 'agent_id' => (string) $this->agent->id])
-            ->assertUnprocessable()->assertJsonValidationErrors('agent_id');
-
-        $this->registerAtKiosk(['bank_id' => (string) $other->id])->assertCreated();
+        $this->registerAtKiosk(['agent_id' => (string) $this->agent->id])->assertCreated();
+        $this->assertNull(Visit::sole()->agent_id);
+        $this->get('/kiosk/kiosk-secret')->assertDontSee('خالد المندوب');
     }
 
     public function test_kiosk_only_accepts_buyer_or_seller(): void
     {
-        $this->registerAtKiosk(['customer_type' => 'other', 'agent_id' => 'none'])->assertUnprocessable()->assertJsonValidationErrors('customer_type');
-        $this->get('/kiosk/kiosk-secret')->assertSee('خالد المندوب');
+        $this->registerAtKiosk(['customer_type' => 'other'])->assertUnprocessable()->assertJsonValidationErrors('customer_type');
     }
 
     public function test_candidates_suggest_same_agent_opposite_type_first(): void
@@ -83,7 +73,7 @@ class AgentsAndDealsTest extends TestCase
 
         $this->actingAs($employee)->postJson("/staff/visits/{$seller->id}/take")->assertOk();
         $this->actingAs($employee)->postJson("/staff/visits/{$seller->id}/link", ['other_id' => $buyer->id])
-            ->assertOk()->assertJsonPath('message', 'رُبط M001 واستُدعي إلى مكتبك الآن');
+            ->assertOk()->assertJsonPath('message', 'رُبط M-001 واستُدعي إلى مكتبك الآن');
 
         $buyer->refresh();
         $this->assertSame('called', $buyer->status->value);
@@ -92,7 +82,7 @@ class AgentsAndDealsTest extends TestCase
         $this->assertSame('2', $buyer->ticket->desk_label);
         $this->assertSame(1, WhatsappLog::where('message_key', 'called')->where('visit_id', $buyer->id)->count());
         // الشاشة تعرض الطرفين معًا لنفس المكتب لأن البائع لم يصل بعد
-        $this->getJson('/display/display-secret/feed')->assertJsonPath('current.tickets', ['M001', 'B001'])->assertJsonPath('current.desk', '2');
+        $this->getJson('/display/display-secret/feed')->assertJsonPath('current.tickets', ['M-001', 'S-001'])->assertJsonPath('current.desk', '2');
 
         // حالة الموظف: الطرف الآخر معه
         $this->actingAs($employee)->getJson('/staff/state')
@@ -118,13 +108,13 @@ class AgentsAndDealsTest extends TestCase
 
         // موظف آخر يأخذ المشتري فيُستدعى البائع معه
         $this->actingAs($b)->postJson("/staff/visits/{$buyer->id}/take")
-            ->assertOk()->assertJsonPath('message', 'تم استدعاء M001 مع الطرف الآخر B001 إلى مكتب 3');
+            ->assertOk()->assertJsonPath('message', 'تم استدعاء M-001 مع الطرف الآخر S-001 إلى مكتب 3');
         $this->assertSame($b->id, $seller->fresh()->employee_id);
         $this->assertSame('waiting', $other->fresh()->status->value);
 
         $this->getJson('/display/display-secret/feed')
             ->assertJsonPath('current.desk', '3')
-            ->assertJsonPath('current.tickets', ['M001', 'B001']);
+            ->assertJsonPath('current.tickets', ['M-001', 'S-001']);
 
         // إنهاء الخدمة ينهي الطرفين ويرسل الشكر لكليهما
         $this->actingAs($b)->postJson("/staff/visits/{$buyer->id}/complete")->assertOk();
@@ -143,7 +133,7 @@ class AgentsAndDealsTest extends TestCase
         $this->actingAs($a)->postJson("/staff/visits/{$seller->id}/take");
         $this->actingAs($b)->postJson("/staff/visits/{$buyer->id}/take");
         $this->actingAs($a)->postJson("/staff/visits/{$seller->id}/link", ['other_id' => $buyer->id])
-            ->assertOk()->assertJsonPath('message', 'رُبط M001 بالصفقة');
+            ->assertOk()->assertJsonPath('message', 'رُبط M-001 بالصفقة');
 
         $this->assertSame($b->id, $buyer->fresh()->employee_id);
         $this->assertNotNull($buyer->fresh()->deal_id);

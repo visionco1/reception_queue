@@ -71,7 +71,7 @@ class MessageController extends Controller
 
         $key = MessageKey::from($data['key']);
         $body = $whatsapp->render($key, [
-            'name' => __('عميل تجريبي'), 'first_name' => __('عميل'), 'ticket' => 'M001', 'desk' => '1',
+            'name' => __('عميل تجريبي'), 'first_name' => __('عميل'), 'ticket' => 'M-001', 'desk' => '1', 'link' => url('/t/example'),
             'ahead' => setting('wa_near_turn_threshold', 1), 'company' => setting('company_name'),
         ]);
         $log = $whatsapp->sendTest(Phone::normalize($data['phone']), $body);

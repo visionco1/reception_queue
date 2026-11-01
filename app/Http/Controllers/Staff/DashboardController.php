@@ -15,7 +15,6 @@ use App\Models\Visit;
 use App\Services\QueueService;
 use App\Support\Phone;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 
 class DashboardController extends Controller
 {
@@ -29,6 +28,9 @@ class DashboardController extends Controller
                 ->groupBy('bank_id')->map(fn ($g) => $g->map(fn ($a) => ['id' => (string) $a->id, 'name' => $a->name])->values()),
             'sources' => ClientSource::options(),
             'types' => CustomerType::options(),
+            'clientTypes' => \App\Models\ClientType::query()->active()->ordered()->get(['id', 'name']),
+            'outcomes' => \App\Enums\Outcome::options(),
+            'vias' => \App\Enums\ViaDetail::options(),
         ]);
     }
 
@@ -49,32 +51,48 @@ class DashboardController extends Controller
         return back()->with('status', __('تم اختيار مكتب :desk', ['desk' => $desk->number]));
     }
 
-    /** عملائي اليوم / سجل الخدمات */
+    /** قائمة انتظار اليوم: كل أرقام اليوم بحالاتها، مع حذف من لم يكمل طلبه */
     public function today(Request $request)
     {
-        $date = Carbon::parse($request->query('date', today()->toDateString()));
+        $status = $request->query('status', 'all');
+        $mine = $request->boolean('mine');
+        $q = trim((string) $request->query('q', ''));
         $user = $request->user();
 
-        $visits = Visit::query()
-            ->with('customer', 'ticket', 'bank', 'agent', 'clientType', 'deal.visits.customer', 'deal.visits.ticket')
-            ->where(fn ($q) => $q->where('employee_id', $user->id)->orWhere('created_by', $user->id))
-            ->where(function ($q) use ($date) {
-                $q->whereBetween('called_at', [$date->copy()->startOfDay(), $date->copy()->endOfDay()])
-                    ->orWhere(fn ($r) => $r->where('channel', Channel::Remote)->whereBetween('created_at', [$date->copy()->startOfDay(), $date->copy()->endOfDay()]));
+        $base = Visit::query()
+            ->whereHas('ticket', fn ($t) => $t->whereDate('ticket_date', today()));
+
+        $visits = (clone $base)
+            ->with('customer', 'ticket', 'bank', 'agent', 'clientType', 'employee', 'desk', 'assignedDesk')
+            ->when($mine, fn ($w) => $w->where(fn ($x) => $x->where('employee_id', $user->id)->orWhere('created_by', $user->id)))
+            ->when($status === 'active', fn ($w) => $w->whereIn('status', VisitStatus::active()))
+            ->when(in_array($status, ['waiting', 'completed', 'no_show', 'cancelled'], true), fn ($w) => $w->where('status', $status))
+            ->when($q !== '', function ($w) use ($q) {
+                $digits = preg_replace('/\D+/', '', Phone::toAsciiDigits($q));
+                $w->where(fn ($x) => $x->whereHas('customer', fn ($c) => $c->where('name', 'like', "%{$q}%")
+                    ->when(strlen($digits) >= 3, fn ($c2) => $c2->orWhere('mobile', 'like', '%'.ltrim($digits, '0').'%')))
+                    ->orWhereHas('ticket', fn ($t) => $t->where('ticket_no', 'like', '%'.strtoupper($q).'%')));
             })
-            ->orderByRaw('coalesce(called_at, created_at) desc')
+            ->join('queue_tickets', 'queue_tickets.visit_id', '=', 'visits.id')
+            ->orderBy('queue_tickets.queued_at')
+            ->orderBy('queue_tickets.id')
+            ->select('visits.*')
             ->get();
 
-        $served = $visits->where('channel', Channel::InPerson)->where('status', VisitStatus::Completed);
+        $all = (clone $base)->get(['status']);
 
         return view('staff.today', [
-            'date' => $date,
             'visits' => $visits,
-            'summary' => [
-                'served' => $served->count(),
-                'remote' => $visits->where('channel', Channel::Remote)->count(),
-                'no_show' => $visits->where('status', VisitStatus::NoShow)->count(),
-                'avg_service' => $served->whereNotNull('service_seconds')->avg('service_seconds'),
+            'status' => $status,
+            'mine' => $mine,
+            'q' => $q,
+            'counts' => [
+                'all' => $all->count(),
+                'waiting' => $all->where('status', VisitStatus::Waiting)->count(),
+                'active' => $all->whereIn('status', [VisitStatus::Called, VisitStatus::InService])->count(),
+                'completed' => $all->where('status', VisitStatus::Completed)->count(),
+                'no_show' => $all->where('status', VisitStatus::NoShow)->count(),
+                'cancelled' => $all->where('status', VisitStatus::Cancelled)->count(),
             ],
         ]);
     }
@@ -84,7 +102,7 @@ class DashboardController extends Controller
         $user->loadMissing('currentDesk', 'desk');
         $desk = $user->workingDesk();
 
-        $waiting = $queue->waitingQuery()->with('customer', 'ticket', 'bank', 'agent')->get();
+        $waiting = $queue->waitingQuery()->with('customer', 'ticket', 'bank', 'agent', 'assignedDesk')->get();
         $current = $user->activeVisit()?->load('customer', 'ticket', 'bank', 'agent', 'sessions');
 
         // أطراف الصفقات لكل من في الانتظار (لإظهار «مرتبط بـ...» في القائمة)
@@ -96,43 +114,52 @@ class DashboardController extends Controller
                 ->map(fn ($m) => $m->ticket?->ticket_no ?? $m->customer->shortName())->values()
             : [];
 
-        $busy = Visit::query()
-            ->whereIn('status', VisitStatus::active())
-            ->with('employee', 'ticket', 'desk')
-            ->get()
-            ->map(fn (Visit $v) => [
-                'desk' => $v->desk?->number,
-                'employee' => $v->employee?->name,
-                'ticket_no' => $v->ticket?->ticket_no,
-                'status' => $v->status->value,
-                'mine' => $v->employee_id === $user->id,
-            ])
-            ->sortBy('desk', SORT_NATURAL)
-            ->values();
+        // من يعمل على كل مكتب الآن (لقائمة التحويل)
+        $staffAt = User::query()->where('is_active', true)->whereNotNull('current_desk_id')
+            ->get(['id', 'name', 'current_desk_id'])->groupBy('current_desk_id');
+        $desks = Desk::query()->active()->ordered()->get()->map(fn (Desk $d) => [
+            'id' => $d->id,
+            'number' => $d->number,
+            'staff' => $staffAt->get($d->id, collect())->pluck('name')->implode('، '),
+        ])->values();
 
-        $servedToday = Visit::query()
-            ->where('employee_id', $user->id)
-            ->where('status', VisitStatus::Completed)
-            ->where('channel', Channel::InPerson)
-            ->where('completed_at', '>=', today())
-            ->count();
+        $today = Visit::query()->whereNotNull('called_at')->where('called_at', '>=', today());
+        $servedToday = (clone $today)->where('employee_id', $user->id)->where('status', VisitStatus::Completed)->count();
+        $avgWait = (clone $today)->whereNotNull('wait_seconds')->avg('wait_seconds');
+        $avgService = (clone $today)->where('status', VisitStatus::Completed)->whereNotNull('service_seconds')->avg('service_seconds');
+
+        // من حُوِّل لمكتبي يظهر أولًا، ثم الباقي بالأقدمية
+        $rows = $waiting->sortBy(fn (Visit $v) => $desk && $v->assigned_desk_id === $desk->id ? 0 : 1)->values();
+        $oldest = $waiting->first();
 
         return [
             'server_time' => now()->toIso8601String(),
             'desk' => $desk ? ['id' => $desk->id, 'number' => $desk->number] : null,
-            'waiting' => $waiting->map(fn (Visit $v) => [
+            'desks' => $desks,
+            'stats' => [
+                'waiting' => $waiting->count(),
+                'served_today' => $servedToday,
+                'avg_wait' => $avgWait ? (int) round($avgWait) : null,
+                'avg_service' => $avgService ? (int) round($avgService) : null,
+            ],
+            'oldest' => $oldest ? ['ticket_no' => $oldest->ticket->ticket_no, 'since' => $oldest->ticket->issued_at->toIso8601String()] : null,
+            'waiting' => $rows->map(fn (Visit $v) => [
                 'id' => $v->id,
                 'ticket_no' => $v->ticket->ticket_no,
-                'name' => $v->customer->shortName(),
-                'full_name' => $v->customer->name,
+                'name' => $v->customer->name,
+                'phone' => Phone::mask($v->customer->mobile),
                 'type' => $v->customer_type->value,
-                'type_label' => $v->customer_type->label(),
-                'bank' => $v->bank?->name,
+                'type_label' => $v->typeLabel(),
+                'via_kind' => $v->bank_id ? 'bank' : 'other',
+                'via' => $v->viaLabel(),
                 'agent' => $v->agent?->name,
                 'deal_with' => $dealWith($v),
                 'issued_at' => $v->ticket->issued_at->toIso8601String(),
+                'remote' => $v->channel === Channel::Remote,
+                'requeued' => $v->ticket->no_show_count > 0,
+                'assigned_desk' => $v->assignedDesk?->number,
+                'assigned_to_me' => $desk && $v->assigned_desk_id === $desk->id,
                 'returning' => $v->is_returning,
-                'visits_count' => $v->customer->visits_count,
             ])->values(),
             'current' => $current ? [
                 'id' => $current->id,
@@ -140,7 +167,8 @@ class DashboardController extends Controller
                 'name' => $current->customer->name,
                 'mobile' => Phone::format($current->customer->mobile),
                 'type' => $current->customer_type->value,
-                'type_label' => $current->customer_type->label(),
+                'type_label' => $current->typeLabel(),
+                'via' => $current->viaLabel(),
                 'bank' => $current->bank?->name,
                 'agent' => $current->agent?->name,
                 'agent_id' => $current->agent_id ? (string) $current->agent_id : '',
@@ -164,17 +192,19 @@ class DashboardController extends Controller
                 'started_at' => $current->sessions->whereNull('ended_at')->last()?->started_at?->toIso8601String(),
                 'wait' => $current->wait_seconds,
                 'recalls' => $current->ticket?->recall_count ?? 0,
+                'no_shows' => $current->ticket?->no_show_count ?? 0,
+                'remote' => $current->channel === Channel::Remote,
                 'returning' => $current->is_returning,
                 'visits_count' => $current->customer->visits_count,
                 'customer_url' => route('staff.customers.show', $current->customer_id),
             ] : null,
             'counts' => [
-                'waiting' => $waiting->count(),
+                'all' => $waiting->count(),
                 'buyer' => $waiting->where('customer_type', CustomerType::Buyer)->count(),
                 'seller' => $waiting->where('customer_type', CustomerType::Seller)->count(),
-                'served_today' => $servedToday,
+                'bank' => $waiting->whereNotNull('bank_id')->count(),
+                'other' => $waiting->whereNull('bank_id')->count(),
             ],
-            'busy' => $busy,
         ];
     }
 }

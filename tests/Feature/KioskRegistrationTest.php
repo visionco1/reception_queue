@@ -31,7 +31,7 @@ class KioskRegistrationTest extends TestCase
     {
         $this->registerAtKiosk()
             ->assertCreated()
-            ->assertJson(['ticket_no' => 'M001', 'type' => 'buyer', 'ahead' => 0, 'existing' => false, 'phone_masked' => '05• ••• 4567']);
+            ->assertJson(['ticket_no' => 'M-001', 'type' => 'buyer', 'ahead' => 0, 'minutes' => 0, 'existing' => false, 'phone_masked' => '05X XXX 4567', 'via' => 'مصرف الراجحي']);
 
         $visit = Visit::with('ticket', 'customer')->sole();
         $this->assertSame('waiting', $visit->status->value);
@@ -42,31 +42,34 @@ class KioskRegistrationTest extends TestCase
         $log = WhatsappLog::sole();
         $this->assertSame('registered', $log->message_key->value);
         $this->assertSame('sent', $log->status);
-        $this->assertStringContainsString('M001', $log->body);
-        $this->assertStringContainsString('محمد أحمد', $log->body);
+        // «أهلًا محمد، رقم انتظارك M-001 في ... أمامك 0. تابع دورك: [رابط]»
+        $this->assertStringContainsString('أهلًا محمد،', $log->body);
+        $this->assertStringContainsString('M-001', $log->body);
+        $this->assertStringContainsString('أمامك 0', $log->body);
+        $this->assertStringContainsString(route('track.show', $visit->track_token), $log->body);
     }
 
     public function test_numbering_is_sequential_per_type_and_resets_daily(): void
     {
-        $this->registerAtKiosk(['mobile' => '0550000001'])->assertJson(['ticket_no' => 'M001']);
-        $this->registerAtKiosk(['mobile' => '0550000002'])->assertJson(['ticket_no' => 'M002', 'ahead' => 1]);
-        $this->registerAtKiosk(['mobile' => '0550000003', 'customer_type' => 'seller'])->assertJson(['ticket_no' => 'B001', 'ahead' => 2]);
+        $this->registerAtKiosk(['mobile' => '0550000001'])->assertJson(['ticket_no' => 'M-001']);
+        $this->registerAtKiosk(['mobile' => '0550000002'])->assertJson(['ticket_no' => 'M-002', 'ahead' => 1, 'minutes' => 15]);
+        $this->registerAtKiosk(['mobile' => '0550000003', 'customer_type' => 'seller'])->assertJson(['ticket_no' => 'S-001', 'ahead' => 2, 'minutes' => 30]);
 
         $this->travel(1)->days();
-        $this->registerAtKiosk(['mobile' => '0550000004'])->assertJson(['ticket_no' => 'M001']);
+        $this->registerAtKiosk(['mobile' => '0550000004'])->assertJson(['ticket_no' => 'M-001']);
         $this->assertSame(4, QueueTicket::count());
     }
 
     public function test_prefixes_are_configurable(): void
     {
         app(\App\Support\Settings::class)->set(['ticket_prefix_buyer' => 'P', 'ticket_digits' => 4]);
-        $this->registerAtKiosk()->assertJson(['ticket_no' => 'P0001']);
+        $this->registerAtKiosk()->assertJson(['ticket_no' => 'P-0001']);
     }
 
     public function test_same_mobile_twice_today_returns_the_existing_ticket(): void
     {
         $this->registerAtKiosk()->assertCreated();
-        $this->registerAtKiosk(['mobile' => '+966 55 123 4567'])->assertOk()->assertJson(['ticket_no' => 'M001', 'existing' => true]);
+        $this->registerAtKiosk(['mobile' => '551234567'])->assertOk()->assertJson(['ticket_no' => 'M-001', 'existing' => true]);
 
         $this->assertSame(1, Customer::count());
         $this->assertSame(1, Visit::count());
@@ -78,7 +81,7 @@ class KioskRegistrationTest extends TestCase
         $this->registerAtKiosk();
         Visit::query()->update(['status' => 'completed']);
 
-        $this->registerAtKiosk()->assertCreated()->assertJson(['ticket_no' => 'M002']);
+        $this->registerAtKiosk()->assertCreated()->assertJson(['ticket_no' => 'M-002']);
 
         $this->assertSame(1, Customer::count());
         $this->assertSame(2, Customer::first()->visits_count);
@@ -87,10 +90,48 @@ class KioskRegistrationTest extends TestCase
 
     public function test_validation_messages_are_arabic(): void
     {
-        $this->registerAtKiosk(['name' => '', 'mobile' => '123', 'customer_type' => '', 'bank_id' => ''])
+        $this->registerAtKiosk(['name' => 'م', 'mobile' => '0451234567', 'customer_type' => '', 'bank_id' => ''])
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['name', 'mobile', 'customer_type', 'bank_id'])
-            ->assertJsonPath('errors.mobile.0', 'رقم الجوال غير صحيح. اكتبه بالصيغة 05XXXXXXXX');
+            ->assertJsonPath('errors.name.0', 'الاسم حرفين على الأقل')
+            ->assertJsonPath('errors.mobile.0', 'رقم الجوال 9 أرقام يبدأ بـ 5');
+
+        $this->registerAtKiosk(['via' => ''])->assertUnprocessable()->assertJsonValidationErrors('via');
+    }
+
+    public function test_other_with_optional_detail_needs_no_bank(): void
+    {
+        $this->registerAtKiosk(['via' => 'other', 'bank_id' => null, 'via_detail' => 'company'])
+            ->assertCreated()
+            ->assertJson(['via' => 'شركة عقارية']);
+
+        $visit = Visit::sole();
+        $this->assertNull($visit->bank_id);
+        $this->assertSame('أخرى · شركة عقارية', $visit->viaLabel());
+    }
+
+    public function test_outside_working_hours_the_kiosk_does_not_register(): void
+    {
+        app(\App\Support\Settings::class)->set(['work_start' => '08:00', 'work_end' => '16:00']);
+        $this->travelTo(today()->setTime(19, 0));
+
+        $this->getJson('/kiosk/kiosk-secret/state')->assertJson(['open' => false]);
+        $this->registerAtKiosk()->assertStatus(423);
+        $this->assertSame(0, Visit::count());
+
+        $this->travelTo(today()->setTime(9, 0));
+        $this->registerAtKiosk()->assertCreated();
+    }
+
+    public function test_featured_banks_show_on_the_kiosk_and_others_behind_other_bank(): void
+    {
+        \App\Models\Bank::query()->where('name', 'مصرف الراجحي')->update(['is_featured' => true]);
+        \App\Models\Bank::create(['name' => 'بنك البلاد', 'sort_order' => 3]);
+
+        $this->get('/kiosk/kiosk-secret')->assertOk()
+            ->assertSee('مصرف الراجحي')
+            ->assertSee('بنك البلاد')  // في قائمة «بنك آخر»
+            ->assertSee('English');
     }
 
     public function test_customer_without_bank_is_accepted(): void

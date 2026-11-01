@@ -10,7 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 /**
- * إصدار أرقام الانتظار: رمز نوع العميل + رقم تسلسلي يومي (M023، B014).
+ * إصدار أرقام الانتظار: رمز نوع العميل + رقم تسلسلي يومي (M-014 للمشتري، S-014 للبائع).
  * الترقيم مستقل لكل رمز ويبدأ من جديد كل يوم، وترتيب الدور يبقى بحسب وقت التسجيل.
  * يجب استدعاؤه داخل Transaction.
  */
@@ -18,18 +18,20 @@ class TicketNumberService
 {
     public function prefixFor(CustomerType $type): string
     {
-        $prefix = $type === CustomerType::Buyer
-            ? setting('ticket_prefix_buyer', 'M')
-            : setting('ticket_prefix_seller', 'B');
+        [$key, $fallback] = match ($type) {
+            CustomerType::Buyer => ['ticket_prefix_buyer', 'M'],
+            CustomerType::Seller => ['ticket_prefix_seller', 'S'],
+            CustomerType::Other => ['ticket_prefix_other', 'G'],
+        };
 
-        return mb_strtoupper(trim((string) $prefix)) ?: ($type === CustomerType::Buyer ? 'M' : 'B');
+        return mb_strtoupper(trim((string) setting($key, $fallback))) ?: $fallback;
     }
 
     public function format(string $prefix, int $number): string
     {
         $digits = max(1, min(6, (int) setting('ticket_digits', 3)));
 
-        return $prefix.str_pad((string) $number, $digits, '0', STR_PAD_LEFT);
+        return $prefix.'-'.str_pad((string) $number, $digits, '0', STR_PAD_LEFT);
     }
 
     public function issue(Visit $visit): QueueTicket
@@ -44,6 +46,7 @@ class TicketNumberService
             'number' => $number,
             'ticket_no' => $this->format($prefix, $number),
             'issued_at' => now(),
+            'queued_at' => now(),
         ]);
     }
 

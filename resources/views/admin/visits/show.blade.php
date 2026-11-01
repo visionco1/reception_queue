@@ -15,6 +15,10 @@
         @endif
         <dl class="mt-4 text-[0.9375rem] divide-y divide-line-soft">
             <div class="flex justify-between gap-4 py-2"><dt class="text-ink-faint">{{ __('الحالة') }}</dt><dd><x-status-pill :status="$visit->status" /></dd></div>
+            @if ($visit->outcome)
+                <div class="flex justify-between gap-4 py-2"><dt class="text-ink-faint">{{ __('نتيجة الصفقة') }}</dt><dd><span class="status-pill outcome-{{ $visit->outcome->value }}">{{ $visit->outcome->label() }}</span></dd></div>
+            @endif
+            <div class="flex justify-between gap-4 py-2"><dt class="text-ink-faint">{{ __('الجهة') }}</dt><dd>{{ $visit->viaLabel() }}</dd></div>
             @foreach ([
                 [__('طريقة الدخول'), $visit->channel->label().($visit->source ? ' ('.$visit->source->label().')' : '')],
                 [__('النوع'), $visit->typeLabel()],

@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Enums\Channel;
 use App\Enums\CustomerType;
 use App\Enums\MessageKey;
+use App\Enums\Outcome;
+use App\Enums\ViaDetail;
 use App\Enums\VisitStatus;
 use App\Exceptions\QueueException;
 use App\Models\AuditLog;
@@ -41,51 +43,142 @@ class QueueService
      *
      * @return array{0: Visit, 1: bool} الزيارة، وهل كانت لديه تذكرة نشطة اليوم مسبقًا
      */
-    public function registerWalkIn(string $name, string $mobile, CustomerType $type, ?int $bankId, ?int $agentId = null): array
+    public function registerWalkIn(string $name, string $mobile, CustomerType $type, ?int $bankId, ?int $agentId = null, ?ViaDetail $via = null): array
     {
-        [$visit, $existing] = DB::transaction(function () use ($name, $mobile, $type, $bankId, $agentId) {
+        [$visit, $existing] = DB::transaction(function () use ($name, $mobile, $type, $bankId, $agentId, $via) {
             $customer = Customer::query()->where('mobile', $mobile)->lockForUpdate()->first();
 
             if ($customer) {
                 // منع إصدار رقمين لنفس العميل في نفس اليوم ما دام دوره لم ينتهِ
-                $active = $customer->visits()
-                    ->where('channel', Channel::InPerson)
-                    ->whereIn('status', [VisitStatus::Waiting->value, ...VisitStatus::active()])
-                    ->whereHas('ticket', fn ($q) => $q->whereDate('ticket_date', today()))
-                    ->with('ticket')
-                    ->latest('id')
-                    ->first();
-
-                if ($active) {
+                if ($active = $this->activeTicketOf($customer)) {
                     return [$active, true];
                 }
             } else {
                 $customer = Customer::create(['name' => $name, 'mobile' => $mobile]);
             }
 
-            $visit = $customer->visits()->create([
+            $visit = $this->enqueue($customer, [
                 'channel' => Channel::InPerson,
                 'customer_type' => $type,
                 'bank_id' => $bankId,
+                'via_detail' => $bankId ? null : $via,
                 'agent_id' => $agentId,
-                'status' => VisitStatus::Waiting,
-                'is_returning' => $customer->visits_count > 0,
-            ]);
-
-            $this->tickets->issue($visit);
-            $this->logStatus($visit, null, VisitStatus::Waiting, null, __('تسجيل من آيباد الاستقبال'));
-            $customer->refreshVisitStats();
+            ], null, __('تسجيل من آيباد الاستقبال'));
 
             return [$visit, false];
         });
 
-        $visit->load('ticket', 'customer');
+        $visit->load('ticket', 'customer', 'bank');
 
         if (! $existing) {
-            $this->whatsapp->notify($visit, MessageKey::Registered);
+            $this->whatsapp->notify($visit, MessageKey::Registered, ['ahead' => $this->ahead($visit)]);
         }
 
         return [$visit, $existing];
+    }
+
+    /**
+     * إضافة عميل عن بُعد إلى قائمة الانتظار برقم (يضيفه الموظف من لوحته).
+     *
+     * @throws QueueException إذا كان للعميل رقم نشط اليوم
+     */
+    public function enqueueRemote(Customer $customer, array $attributes, User $employee): Visit
+    {
+        $visit = DB::transaction(function () use ($customer, $attributes, $employee) {
+            Customer::query()->whereKey($customer->id)->lockForUpdate()->first();
+
+            if ($active = $this->activeTicketOf($customer)) {
+                throw new QueueException(__('العميل في قائمة الانتظار بالفعل برقم :ticket', ['ticket' => $active->ticketNo()]), 409);
+            }
+
+            $visit = $this->enqueue($customer, ['channel' => Channel::Remote, 'created_by' => $employee->id] + $attributes,
+                $employee, __('إضافة عميل عن بُعد إلى قائمة الانتظار'));
+
+            AuditLog::record('visit.remote_created', $visit, __(':user أضاف :name إلى قائمة الانتظار برقم :ticket', [
+                'user' => $employee->name, 'name' => $customer->name, 'ticket' => $visit->ticketNo(),
+            ]));
+
+            return $visit;
+        });
+
+        $visit->load('ticket', 'customer', 'bank');
+        $this->whatsapp->notify($visit, MessageKey::Registered, ['ahead' => $this->ahead($visit)]);
+
+        return $visit;
+    }
+
+    /** زيارة اليوم التي ما زال دورها قائمًا (في الانتظار أو مع موظف) */
+    public function activeTicketOf(Customer $customer): ?Visit
+    {
+        return $customer->visits()
+            ->whereIn('status', [VisitStatus::Waiting->value, ...VisitStatus::active()])
+            ->whereHas('ticket', fn ($q) => $q->whereDate('ticket_date', today()))
+            ->with('ticket')
+            ->latest('id')
+            ->first();
+    }
+
+    /** عدد من أمام العميل في الدور */
+    public function ahead(Visit $visit): int
+    {
+        $visit->loadMissing('ticket');
+        if ($visit->status !== VisitStatus::Waiting || ! $visit->ticket) {
+            return 0;
+        }
+
+        $t = $visit->ticket;
+
+        return $this->waitingQuery()
+            ->where(fn ($q) => $q->where('queue_tickets.queued_at', '<', $t->queued_at)
+                ->orWhere(fn ($w) => $w->where('queue_tickets.queued_at', $t->queued_at)->where('queue_tickets.id', '<', $t->id)))
+            ->count();
+    }
+
+    /**
+     * الوقت التقريبي بالدقائق لمن أمامه $people عميل:
+     * عدد من في الدور × متوسط مدة الخدمة اليوم ÷ عدد المكاتب العاملة.
+     * متوسط الخدمة يبدأ بالقيمة الافتراضية (15 دقيقة) حتى تتوفر بيانات اليوم.
+     */
+    public function estimateMinutes(int $people): int
+    {
+        if ($people <= 0) {
+            return 0;
+        }
+
+        return (int) ceil($people * $this->averageServiceMinutes() / $this->workingDesks());
+    }
+
+    public function averageServiceMinutes(): float
+    {
+        $avg = Visit::query()
+            ->where('status', VisitStatus::Completed->value)
+            ->where('completed_at', '>=', today())
+            ->whereNotNull('service_seconds')
+            ->avg('service_seconds');
+
+        return $avg ? max(1, $avg / 60) : max(1, (float) setting('default_service_minutes', 15));
+    }
+
+    /** المكاتب العاملة الآن: موظفون اختاروا مكتبًا ونشطون خلال آخر 15 دقيقة أو مع عميل */
+    public function workingDesks(): int
+    {
+        $busy = Visit::query()->whereIn('status', VisitStatus::active())->whereNotNull('desk_id')->distinct()->pluck('desk_id');
+
+        $online = collect();
+        if (config('session.driver') === 'database') {
+            $online = DB::table(config('session.table', 'sessions'))
+                ->where('last_activity', '>=', now()->subMinutes(15)->getTimestamp())
+                ->whereNotNull('user_id')
+                ->pluck('user_id');
+        }
+
+        $desks = User::query()
+            ->where('is_active', true)
+            ->whereNotNull('current_desk_id')
+            ->when($online->isNotEmpty(), fn ($q) => $q->whereIn('id', $online), fn ($q) => $q->where('last_login_at', '>=', today()))
+            ->pluck('current_desk_id');
+
+        return max(1, $busy->merge($desks)->unique()->count());
     }
 
     /**
@@ -96,6 +189,11 @@ class QueueService
     public function take(Visit $visit, User $employee): Visit
     {
         $desk = $this->deskOf($employee);
+
+        $visit->refresh();
+        if ($visit->assigned_desk_id && $visit->assigned_desk_id !== $desk->id) {
+            throw new QueueException(__('هذا العميل محوّل إلى مكتب :desk.', ['desk' => $visit->assignedDesk?->number]), 409);
+        }
 
         $called = DB::transaction(function () use ($visit, $employee, $desk) {
             // قفل سجل الموظف لمنع أخذ عميلين معًا بنقرة مزدوجة
@@ -183,12 +281,15 @@ class QueueService
         return $visit->refresh();
     }
 
-    /** إنهاء الخدمة للعميل وأطراف صفقته الذين معه: تُحسب المدة وتُرسل رسالة الشكر */
-    public function complete(Visit $visit, User $employee, ?string $notes = null): Visit
+    /**
+     * إنهاء الخدمة للعميل وأطراف صفقته الذين معه: تُسجل النتيجة (مكتملة / ناقصة أوراق / ملغاة)
+     * وتُحسب المدة وتُرسل رسالة الشكر.
+     */
+    public function complete(Visit $visit, User $employee, ?string $notes = null, Outcome $outcome = Outcome::Completed): Visit
     {
         $group = $this->group($visit, $employee);
 
-        DB::transaction(function () use ($group, $employee, $notes) {
+        DB::transaction(function () use ($group, $employee, $notes, $outcome) {
             $now = now();
             foreach ($group as $member) {
                 $from = $member->status;
@@ -196,14 +297,20 @@ class QueueService
 
                 $member->update([
                     'status' => VisitStatus::Completed,
+                    'outcome' => $outcome,
                     'completed_at' => $now,
                     'service_seconds' => $session ? (int) $session->started_at->diffInSeconds($now) : null,
                     'notes' => $notes !== null && trim($notes) !== '' ? trim($notes) : $member->notes,
                 ]);
-                $this->logStatus($member, $from, VisitStatus::Completed, $employee);
-                AuditLog::record('visit.completed', $member, __(':user أنهى خدمة :ticket', [
-                    'user' => $employee->name, 'ticket' => $member->ticketNo() ?? '#'.$member->id,
+                $this->logStatus($member, $from, VisitStatus::Completed, $employee, $outcome->label());
+                AuditLog::record('visit.completed', $member, __(':user أنهى خدمة :ticket (:outcome)', [
+                    'user' => $employee->name, 'ticket' => $member->ticketNo() ?? '#'.$member->id, 'outcome' => $outcome->label(),
                 ]));
+            }
+
+            $dealIds = $group->pluck('deal_id')->filter()->unique();
+            if ($dealIds->isNotEmpty()) {
+                Deal::query()->whereIn('id', $dealIds)->update(['outcome' => $outcome->value]);
             }
         });
 
@@ -212,20 +319,141 @@ class QueueService
         return $visit->refresh();
     }
 
-    /** لم يحضر العميل بعد النداء (لهذا الطرف فقط) */
-    public function noShow(Visit $visit, User $employee): Visit
+    /**
+     * لم يحضر العميل بعد النداء (لهذا الطرف فقط): أول مرة يعود لآخر الدور،
+     * وإذا تكرر تُلغى التذكرة.
+     *
+     * @return bool true إذا أُعيد لآخر الدور، false إذا أُلغيت التذكرة
+     */
+    public function noShow(Visit $visit, User $employee): bool
     {
         $this->assertOwnActive($visit, $employee);
 
-        DB::transaction(function () use ($visit, $employee) {
+        $requeued = DB::transaction(function () use ($visit, $employee) {
             $from = $visit->status;
-            $this->closeSession($visit, 'no_show', now());
-            $visit->update(['status' => VisitStatus::NoShow, 'completed_at' => now()]);
-            $this->logStatus($visit, $from, VisitStatus::NoShow, $employee);
-            AuditLog::record('visit.no_show', $visit, __('تخطي :ticket (لم يحضر)', ['ticket' => $visit->ticketNo() ?? '#'.$visit->id]));
+            $now = now();
+            $ticket = $visit->ticket;
+            $this->closeSession($visit, 'no_show', $now);
+
+            if ($ticket && $ticket->no_show_count < 1) {
+                $ticket->update([
+                    'no_show_count' => $ticket->no_show_count + 1,
+                    'queued_at' => $now,
+                    'called_at' => null,
+                    'desk_label' => null,
+                    'near_notified_at' => null,
+                ]);
+                $visit->update([
+                    'status' => VisitStatus::Waiting,
+                    'employee_id' => null,
+                    'desk_id' => null,
+                    'assigned_desk_id' => null,
+                    'called_at' => null,
+                    'service_started_at' => null,
+                    'wait_seconds' => null,
+                ]);
+                $this->logStatus($visit, $from, VisitStatus::Waiting, $employee, __('لم يحضر — أُعيد لآخر الدور'));
+                AuditLog::record('visit.no_show', $visit, __(':ticket لم يحضر، أُعيد لآخر الدور', ['ticket' => $visit->ticketNo() ?? '#'.$visit->id]));
+
+                return true;
+            }
+
+            $visit->update(['status' => VisitStatus::NoShow, 'completed_at' => $now]);
+            $ticket?->increment('no_show_count');
+            $this->logStatus($visit, $from, VisitStatus::NoShow, $employee, __('لم يحضر للمرة الثانية — أُلغيت التذكرة'));
+            AuditLog::record('visit.no_show', $visit, __(':ticket لم يحضر للمرة الثانية، أُلغيت التذكرة', ['ticket' => $visit->ticketNo() ?? '#'.$visit->id]));
+
+            return false;
+        });
+
+        $this->notifyNearTurn();
+
+        return $requeued;
+    }
+
+    /**
+     * تحويل عميلي الحالي (وأطراف صفقته الذين معي) لمكتب آخر: يعود للانتظار
+     * بنفس أقدميته، ولا يأخذه إلا موظف ذلك المكتب.
+     */
+    public function transfer(Visit $visit, User $employee, Desk $to): Visit
+    {
+        $group = $this->group($visit, $employee);
+        $from = $this->deskOf($employee);
+
+        if ($to->id === $from->id) {
+            throw new QueueException(__('اختر مكتبًا غير مكتبك.'));
+        }
+
+        DB::transaction(function () use ($group, $employee, $to) {
+            $now = now();
+            foreach ($group as $member) {
+                $status = $member->status;
+                $this->closeSession($member, 'transferred', $now);
+                $member->ticket?->update(['called_at' => null, 'desk_label' => null]);
+                $member->update([
+                    'status' => VisitStatus::Waiting,
+                    'employee_id' => null,
+                    'desk_id' => null,
+                    'assigned_desk_id' => $to->id,
+                    'called_at' => null,
+                    'service_started_at' => null,
+                    'wait_seconds' => null,
+                ]);
+                $this->logStatus($member, $status, VisitStatus::Waiting, $employee, __('تحويل لمكتب :desk', ['desk' => $to->number]));
+            }
+
+            AuditLog::record('visit.transferred', $group->first(), __(':user حوّل :tickets إلى مكتب :desk', [
+                'user' => $employee->name,
+                'tickets' => $group->map(fn ($v) => $v->ticketNo() ?? '#'.$v->id)->implode(' + '),
+                'desk' => $to->number,
+            ]));
         });
 
         return $visit->refresh();
+    }
+
+    /**
+     * حذف زيارة لم تكتمل (العميل لم يكمل طلبه). يُحذف العميل أيضًا إذا لم تبق له زيارات.
+     * الزيارات المكتملة لا تُحذف حتى تبقى التقارير صحيحة.
+     */
+    public function delete(Visit $visit, User $user): void
+    {
+        $visit->refresh()->loadMissing('customer', 'ticket');
+
+        if ($visit->status === VisitStatus::Completed) {
+            throw new QueueException(__('لا يمكن حذف خدمة مكتملة.'), 409);
+        }
+        if (in_array($visit->status->value, VisitStatus::active(), true) && $visit->employee_id !== $user->id && ! $user->isManager()) {
+            throw new QueueException(__('هذا العميل مع موظف آخر الآن.'), 409);
+        }
+
+        DB::transaction(function () use ($visit, $user) {
+            if ($visit->deal_id) {
+                $this->unlink($visit, $user);
+            }
+
+            $customer = $visit->customer;
+            AuditLog::record('visit.deleted', null, __(':user حذف :ticket — :name', [
+                'user' => $user->name,
+                'ticket' => $visit->ticketNo() ?? __('زيارة #:id', ['id' => $visit->id]),
+                'name' => $customer->name,
+            ]), [
+                'visit_id' => $visit->id,
+                'status' => $visit->status->value,
+                'customer' => $customer->name,
+                'mobile' => $customer->mobile,
+            ]);
+
+            $visit->delete();
+
+            if (! $customer->visits()->exists()) {
+                $customer->delete();
+            } else {
+                $customer->refreshVisitStats();
+            }
+        });
+
+        $this->notifyNearTurn();
     }
 
     /** إرجاع العميل إلى قائمة الانتظار ليأخذه موظف آخر (لهذا الطرف فقط) */
@@ -241,11 +469,12 @@ class QueueService
                 'status' => VisitStatus::Waiting,
                 'employee_id' => null,
                 'desk_id' => null,
+                'assigned_desk_id' => null,
                 'called_at' => null,
                 'service_started_at' => null,
                 'wait_seconds' => null,
             ]);
-            $this->logStatus($visit, $from, VisitStatus::Waiting, $employee, __('أُرجع إلى الطابور'));
+            $this->logStatus($visit, $from, VisitStatus::Waiting, $employee, __('أُرجع إلى قائمة الانتظار'));
             AuditLog::record('visit.released', $visit, __(':user أرجع :ticket إلى الطابور', [
                 'user' => $employee->name, 'ticket' => $visit->ticketNo() ?? '#'.$visit->id,
             ]));
@@ -357,7 +586,7 @@ class QueueService
 
             $other->refresh();
             $called = null;
-            if ($other->status === VisitStatus::Waiting && $other->isInPerson()) {
+            if ($other->status === VisitStatus::Waiting && $other->ticket()->exists()) {
                 $batch = (string) Str::uuid();
                 $called = $this->callVisit($other, $employee, $desk, $batch, now(), __('استدعاء مع الطرف الآخر'));
 
@@ -416,15 +645,14 @@ class QueueService
         });
     }
 
-    /** قائمة الانتظار المشتركة لليوم مرتبة حسب وقت التسجيل */
+    /** قائمة الانتظار المشتركة لليوم بالأقدمية (من لم يحضر يعود لآخرها مرة واحدة) */
     public function waitingQuery()
     {
         return Visit::query()
             ->where('visits.status', VisitStatus::Waiting->value)
-            ->where('visits.channel', Channel::InPerson->value)
             ->join('queue_tickets', 'queue_tickets.visit_id', '=', 'visits.id')
             ->whereDate('queue_tickets.ticket_date', today())
-            ->orderBy('queue_tickets.issued_at')
+            ->orderBy('queue_tickets.queued_at')
             ->orderBy('queue_tickets.id')
             ->select('visits.*');
     }
@@ -452,6 +680,21 @@ class QueueService
         if ($claimed) {
             $this->whatsapp->notify($visit, MessageKey::NearTurn, ['ahead' => $ahead]);
         }
+    }
+
+    /** إنشاء زيارة في الانتظار مع رقمها. يجب استدعاؤها داخل Transaction */
+    private function enqueue(Customer $customer, array $attributes, ?User $by, string $note): Visit
+    {
+        $visit = $customer->visits()->create($attributes + [
+            'status' => VisitStatus::Waiting,
+            'is_returning' => $customer->visits_count > 0,
+        ]);
+
+        $this->tickets->issue($visit);
+        $this->logStatus($visit, null, VisitStatus::Waiting, $by, $note);
+        $customer->refreshVisitStats();
+
+        return $visit;
     }
 
     public function logStatus(Visit $visit, ?VisitStatus $from, VisitStatus $to, ?User $user, ?string $note = null): void
@@ -486,6 +729,7 @@ class QueueService
                 'status' => VisitStatus::Called->value,
                 'employee_id' => $employee->id,
                 'desk_id' => $desk->id,
+                'assigned_desk_id' => null,
                 'called_at' => $now,
                 'updated_at' => $now,
             ]);
@@ -498,7 +742,7 @@ class QueueService
         $ticket = $visit->ticket;
 
         $ticket?->update(['called_at' => $now, 'desk_label' => $desk->number]);
-        $visit->update(['wait_seconds' => $ticket ? (int) $ticket->issued_at->diffInSeconds($now) : 0]);
+        $visit->update(['wait_seconds' => $ticket ? max(0, (int) $ticket->issued_at->diffInSeconds($now)) : 0]);
 
         // تبدأ مدة الخدمة لحظة أخذ العميل
         ServiceSession::create([

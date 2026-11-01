@@ -122,7 +122,7 @@ class ReportService
 
         return $visits->groupBy(fn ($v) => $v->bank_id ?? 0)
             ->map(fn ($g, $id) => [
-                'name' => $id ? ($names[$id] ?? __('بنك محذوف')) : __('بدون بنك'),
+                'name' => $id ? ($names[$id] ?? __('بنك محذوف')) : __('أخرى (ليس عن طريق بنك)'),
                 'count' => $g->count(),
                 'buyers' => $g->where('customer_type', CustomerType::Buyer)->count(),
                 'sellers' => $g->where('customer_type', CustomerType::Seller)->count(),

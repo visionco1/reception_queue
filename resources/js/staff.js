@@ -1,12 +1,13 @@
-import { api, humanDuration, clockDuration, visitsLabel } from './lib';
+import { api, clockDuration, visitsLabel, waitClass } from './lib';
 
 /**
- * لوحة الموظف: قائمة انتظار مشتركة تتحدث تلقائيًا، أخذ العميل،
- * وإدارة العميل الحالي حتى إنهاء الخدمة.
+ * لوحة الموظفين (الشاشة 03): قائمة انتظار مشتركة تتحدث تلقائيًا بفلاتر
+ * وبحث، نداء عميل معيّن، وإدارة «عميلي الحالي» حتى إنهاء الخدمة بنتيجتها.
  */
 export default (config) => ({
     state: config.initial,
     filter: 'all',
+    search: '',
     busy: null,
     toast: null,
     toastTimer: null,
@@ -14,16 +15,22 @@ export default (config) => ({
     offset: 0,
     fresh: {},
     confirming: null,
+    finishing: false,
+    outcome: 'completed',
     notes: '',
     offline: false,
     linkOpen: false,
     candidates: [],
     candLoading: false,
     candFilter: '',
-    editingAgent: false,
+    transferOpen: false,
+    bankChoice: '',
     agentChoice: '',
+    editingAgent: false,
+    remoteMobile: '',
 
     visitsLabel,
+    waitClass,
 
     init() {
         this.syncClock(this.state.server_time);
@@ -48,7 +55,13 @@ export default (config) => ({
             this.offline = false;
             this.markFresh(this.state.waiting, next.waiting);
             this.syncClock(next.server_time);
-            if (this.state.current?.id !== next.current?.id) this.notes = '';
+            if (this.state.current?.id !== next.current?.id) {
+                this.notes = '';
+                this.finishing = false;
+                this.outcome = 'completed';
+                this.editingAgent = false;
+                this.transferOpen = false;
+            }
             this.state = next;
         } catch (e) {
             if (e.network) this.offline = true;
@@ -66,8 +79,21 @@ export default (config) => ({
     },
 
     get waiting() {
-        if (this.filter === 'all') return this.state.waiting;
-        return this.state.waiting.filter((v) => v.type === this.filter);
+        const q = this.search.trim().replace(/\s/g, '').toLowerCase();
+        return this.state.waiting.filter((v) => {
+            if (this.filter === 'buyer' || this.filter === 'seller') {
+                if (v.type !== this.filter) return false;
+            } else if (this.filter === 'bank' || this.filter === 'other') {
+                if (v.via_kind !== this.filter) return false;
+            }
+            if (!q) return true;
+            return [v.name, v.ticket_no, v.phone].some((f) => String(f || '').replace(/\s/g, '').toLowerCase().includes(q.replace(/^0/, '')));
+        });
+    },
+
+    /** أول من يمكنني ندائه: المحوَّل لمكتبي أولًا ثم الأقدم */
+    get nextUp() {
+        return this.state.waiting.find((v) => !v.assigned_desk || v.assigned_to_me) || null;
     },
 
     elapsed(iso) {
@@ -75,26 +101,45 @@ export default (config) => ({
         return Math.max(0, Math.floor((this.tick + this.offset - new Date(iso).getTime()) / 1000));
     },
 
-    waitLabel(v) {
-        return humanDuration(this.elapsed(v.issued_at));
+    waitMinutes(v) {
+        return Math.floor(this.elapsed(v.issued_at) / 60);
     },
 
-    waitTone(v) {
-        const m = this.elapsed(v.issued_at) / 60;
-        if (m >= config.longWaitMinutes) return 'text-danger font-semibold';
-        if (m >= config.longWaitMinutes / 2) return 'text-warn';
-        return 'text-ink-soft';
+    minutes(seconds) {
+        return seconds == null ? '—' : Math.round(seconds / 60);
+    },
+
+    get oldestMinutes() {
+        return this.state.oldest ? Math.floor(this.elapsed(this.state.oldest.since) / 60) : 0;
+    },
+
+    serviceClock() {
+        return clockDuration(this.elapsed(this.state.current?.started_at));
+    },
+
+    canCall(v) {
+        return !this.state.current && this.state.desk && !this.busy && (!v.assigned_desk || v.assigned_to_me);
+    },
+
+    get otherDesks() {
+        return (this.state.desks || []).filter((d) => d.id !== this.state.desk?.id);
     },
 
     get currentAgents() {
-        const bank = this.state.current?.bank_id;
+        const bank = this.bankChoice || this.state.current?.bank_id;
         return (bank && config.agentsByBank[bank]) || [];
+    },
+
+    startAgentEdit() {
+        this.bankChoice = this.state.current?.bank_id || '';
+        this.agentChoice = this.state.current?.agent_id || '';
+        this.editingAgent = true;
     },
 
     async saveAgent() {
         const id = this.state.current?.id;
         if (!id) return;
-        await this.act(config.urls.agent.replace('__ID__', id), { agent_id: this.agentChoice || null });
+        await this.act(config.urls.agent.replace('__ID__', id), { bank_id: this.bankChoice || null, agent_id: this.agentChoice || null });
         this.editingAgent = false;
     },
 
@@ -139,22 +184,18 @@ export default (config) => ({
         return this.act(config.urls[name].replace('__ID__', p.id));
     },
 
-    serviceClock() {
-        return clockDuration(this.elapsed(this.state.current?.started_at));
-    },
-
     notify(message, kind = 'ok') {
         this.toast = { message, kind };
         clearTimeout(this.toastTimer);
         this.toastTimer = setTimeout(() => (this.toast = null), kind === 'error' ? 6000 : 3500);
     },
 
-    async act(url, body = {}, success = null) {
+    async act(url, body = {}, method = 'POST') {
         if (this.busy) return;
         this.busy = url;
         try {
-            const res = await api(url, { method: 'POST', body });
-            if (success || res.message) this.notify(success || res.message);
+            const res = await api(url, { method, body: method === 'DELETE' ? null : body });
+            if (res.message) this.notify(res.message);
             this.confirming = null;
         } catch (e) {
             this.notify(e.message, 'error');
@@ -164,8 +205,12 @@ export default (config) => ({
         }
     },
 
-    take(v) {
+    call(v) {
         return this.act(config.urls.take.replace('__ID__', v.id));
+    },
+
+    remove(v) {
+        return this.act(config.urls.destroy.replace('__ID__', v.id), {}, 'DELETE');
     },
 
     visitAction(name, body = {}) {
@@ -174,7 +219,17 @@ export default (config) => ({
         return this.act(config.urls[name].replace('__ID__', id), body);
     },
 
-    cancel(v) {
-        return this.act(config.urls.cancel.replace('__ID__', v.id));
+    finish() {
+        return this.visitAction('complete', { outcome: this.outcome, notes: this.notes });
+    },
+
+    transferTo(d) {
+        this.transferOpen = false;
+        return this.visitAction('transfer', { desk_id: d.id });
+    },
+
+    openRemote() {
+        this.$dispatch('open-remote', this.remoteMobile ? { mobile: this.remoteMobile } : {});
+        this.remoteMobile = '';
     },
 });

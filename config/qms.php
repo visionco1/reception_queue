@@ -57,27 +57,37 @@ return [
 
     // القيم الافتراضية للإعدادات القابلة للتعديل من لوحة الإدارة
     'defaults' => [
-        'company_name' => 'شركة المحاماة والتوثيق',
-        'welcome_message' => 'أهلًا بكم، يسعدنا خدمتكم. سجّل بياناتك وتابع رقمك على الشاشة.',
-        'logo_path' => null,
+        'company_name' => 'شركة سلطان الهيضل',
+        'welcome_message' => 'سجّل بياناتك وخذ رقمك، وتابع دورك على الشاشة.',
 
         'country_code' => '966',
 
+        // M-014 للمشتري، S-014 للبائع، ورمز للأنواع الأخرى (عملاء عن بعد)
         'ticket_prefix_buyer' => 'M',
-        'ticket_prefix_seller' => 'B',
+        'ticket_prefix_seller' => 'S',
+        'ticket_prefix_other' => 'G',
         'ticket_digits' => 3,
 
-        'kiosk_reset_seconds' => 15,
+        'kiosk_reset_seconds' => 10,
         'kiosk_token' => null,
         'display_token' => null,
 
-        'display_bg' => '#0E3B33',
-        'display_primary' => '#F2EFE6',
-        'display_accent' => '#E3B04B',
-        'display_show_employee' => false,
+        // current = الرقم الحالي بخط كبير | offices = لوحة المكاتب
+        'display_mode' => 'current',
+        // بعد كم ثانية من آخر نداء تعود شاشة العرض للشعار (وقت الهدوء)
+        'display_idle_seconds' => 60,
         'display_recent_count' => 5,
         'display_sound' => true,
-        'display_voice' => false,
+        'display_voice' => true,
+        // رسائل الشريط المتحرك، كل سطر رسالة
+        'ticker_messages' => "أهلًا بكم في شركة سلطان الهيضل\nيرجى إحضار الهوية الوطنية وصك العقار\nتابع رقمك على الشاشة أو على واتساب",
+
+        // ساعات العمل (فارغة = بدون قيود). خارجها يعرض الآيباد رسالة ولا يسجل
+        'work_start' => '',
+        'work_end' => '',
+
+        // متوسط الخدمة المفترض حتى تتوفر بيانات اليوم (للوقت التقريبي)
+        'default_service_minutes' => 15,
 
         // all = الموظف يبحث في جميع العملاء | own = في العملاء الذين خدمهم فقط
         'employee_search_scope' => 'all',
@@ -86,27 +96,27 @@ return [
         'whatsapp_template_lang' => 'ar',
 
         'wa_registered_enabled' => true,
-        'wa_registered_text' => 'مرحبًا {name}، تم تسجيلك بنجاح. رقم انتظارك: {ticket}.',
+        'wa_registered_text' => 'أهلًا {first_name}، رقم انتظارك {ticket} في {company}. أمامك {ahead}. تابع دورك: {link}',
         'wa_registered_template' => '',
-        'wa_registered_params' => 'name,ticket',
+        'wa_registered_params' => 'first_name,ticket,company,ahead,link',
 
         'wa_near_turn_enabled' => false,
         'wa_near_turn_threshold' => 1,
-        'wa_near_turn_text' => 'متبقي قبلك عميل واحد. رقمك {ticket}، نرجو البقاء قريبًا من صالة الانتظار.',
+        'wa_near_turn_text' => 'اقترب دورك. رقمك {ticket}، نرجو البقاء قريبًا من صالة الانتظار.',
         'wa_near_turn_template' => '',
         'wa_near_turn_params' => 'ticket',
 
         'wa_called_enabled' => true,
-        'wa_called_text' => 'حان دورك الآن. رقمك {ticket} - يرجى التوجه إلى مكتب {desk}.',
+        'wa_called_text' => 'حان دورك، تفضّل إلى مكتب {desk}.',
         'wa_called_template' => '',
-        'wa_called_params' => 'ticket,desk',
+        'wa_called_params' => 'desk',
 
         'wa_thanks_enabled' => true,
-        'wa_thanks_text' => 'شكرًا لزيارتكم. سعدنا بخدمتكم ونسعد دائمًا بتعاملكم معنا.',
+        'wa_thanks_text' => 'شكرًا لزيارتكم {company}. سعدنا بخدمتكم.',
         'wa_thanks_template' => '',
-        'wa_thanks_params' => '',
+        'wa_thanks_params' => 'company',
 
         'wa_services_line_enabled' => false,
-        'wa_services_line_text' => 'نقدم خدمات المحاماة والتوثيق العقاري، ويسعدنا تواصلكم في أي وقت.',
+        'wa_services_line_text' => 'نقدم خدمات المحاماة والاستشارات، ويسعدنا تواصلكم في أي وقت.',
     ],
 ];

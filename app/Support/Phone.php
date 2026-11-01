@@ -84,22 +84,21 @@ class Phone
         return '+'.$number;
     }
 
-    /** إخفاء جزء من الرقم عند عرضه على شاشة عامة */
+    /** إخفاء جزء من الرقم كما في التصميم: 05X XXX 4471 (يظهر آخر 4 أرقام فقط) */
     public static function mask(?string $number): string
     {
         $formatted = self::format($number);
-        $len = mb_strlen($formatted);
-        if ($len < 7) {
+        $totalDigits = preg_match_all('/\d/', $formatted);
+        if ($totalDigits < 7) {
             return $formatted;
         }
 
         $out = '';
-        $digitsSeen = 0;
-        $totalDigits = preg_match_all('/\d/', $formatted);
+        $seen = 0;
         foreach (mb_str_split($formatted) as $ch) {
             if (ctype_digit($ch)) {
-                $digitsSeen++;
-                $out .= ($digitsSeen > 2 && $digitsSeen <= $totalDigits - 4) ? '•' : $ch;
+                $seen++;
+                $out .= ($seen > 2 && $seen <= $totalDigits - 4) ? 'X' : $ch;
             } else {
                 $out .= $ch;
             }

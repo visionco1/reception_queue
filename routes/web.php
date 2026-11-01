@@ -5,6 +5,7 @@ use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Display\DisplayController;
 use App\Http\Controllers\Kiosk\KioskController;
 use App\Http\Controllers\Staff;
+use App\Http\Controllers\Track\TrackController;
 use App\Http\Controllers\WhatsAppWebhookController;
 use Illuminate\Support\Facades\Route;
 
@@ -20,6 +21,7 @@ Route::post('logout', [LoginController::class, 'logout'])->middleware('auth')->n
 // آيباد الاستقبال — بدون تسجيل دخول، محمي برمز سري في الرابط
 Route::prefix('kiosk/{token}')->middleware('device:kiosk')->name('kiosk.')->group(function () {
     Route::get('/', [KioskController::class, 'show'])->name('show');
+    Route::get('state', [KioskController::class, 'state'])->name('state');
     Route::post('register', [KioskController::class, 'register'])->middleware('throttle:kiosk')->name('register');
     Route::get('manifest.webmanifest', [KioskController::class, 'manifest'])->name('manifest');
 });
@@ -28,6 +30,12 @@ Route::prefix('kiosk/{token}')->middleware('device:kiosk')->name('kiosk.')->grou
 Route::prefix('display/{token}')->middleware('device:display')->name('display.')->group(function () {
     Route::get('/', [DisplayController::class, 'show'])->name('show');
     Route::get('feed', [DisplayController::class, 'feed'])->name('feed');
+});
+
+// متابعة الدور للعميل (الرابط يصله على واتساب)
+Route::prefix('t/{token}')->name('track.')->middleware('throttle:track')->group(function () {
+    Route::get('/', [TrackController::class, 'show'])->name('show');
+    Route::get('state', [TrackController::class, 'state'])->name('state');
 });
 
 // Webhook حالات تسليم رسائل واتساب
@@ -52,6 +60,8 @@ Route::middleware(['auth', 'active'])->prefix('staff')->name('staff.')->group(fu
         Route::post('link', 'link')->name('link');
         Route::post('unlink', 'unlink')->name('unlink');
         Route::post('agent', 'agent')->name('agent');
+        Route::post('transfer', 'transfer')->name('transfer');
+        Route::delete('/', 'destroy')->name('destroy');
     });
 
     Route::get('lookup', [Staff\CustomerController::class, 'lookup'])->name('lookup');
@@ -60,12 +70,14 @@ Route::middleware(['auth', 'active'])->prefix('staff')->name('staff.')->group(fu
     Route::get('customers/{customer}', [Staff\CustomerController::class, 'show'])->name('customers.show');
     Route::put('customers/{customer}', [Staff\CustomerController::class, 'update'])->name('customers.update');
     Route::get('today', [Staff\DashboardController::class, 'today'])->name('today');
+    Route::get('performance', [Staff\PerformanceController::class, 'index'])->name('performance');
 });
 
 // لوحة الإدارة — المشرف والمدير
 Route::middleware(['auth', 'active', 'role:admin,supervisor'])->prefix('admin')->name('admin.')->group(function () {
     Route::get('/', [Admin\OverviewController::class, 'index'])->name('overview');
     Route::get('reports', [Admin\ReportController::class, 'index'])->name('reports');
+    Route::get('reports/employees/{user}', [Admin\ReportController::class, 'employee'])->name('reports.employee');
 
     Route::get('customers', [Admin\CustomerController::class, 'index'])->name('customers');
     Route::get('visits', [Admin\VisitController::class, 'index'])->name('visits');

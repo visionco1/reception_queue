@@ -14,6 +14,16 @@
     $peak = collect($hours)->sortByDesc('count')->first();
     $banks = collect($report['banks']);
     $maxBank = max(1, $banks->max('count'));
+    // الفرق عن متوسط الفريق: أخضر أفضل، أحمر أسوأ، محايد لمدة الخدمة
+    $chip = function ($d, $lowerIsBetter = false, $neutral = false) {
+        if ($d === null) {
+            return '';
+        }
+        $good = $neutral ? null : ($lowerIsBetter ? $d <= 0 : $d >= 0);
+        $cls = $good === null ? 'bg-shade text-ink-soft' : ($good ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger');
+
+        return '<span dir="ltr" class="ms-1.5 text-[0.7rem] font-bold rounded-full px-1.5 py-0.5 font-num '.$cls.'">'.($d > 0 ? '+' : '').$d.'%</span>';
+    };
     $range = $report['from']->isSameDay($report['to'])
         ? $report['from']->translatedFormat('j F Y')
         : $report['from']->translatedFormat('j F').' – '.$report['to']->translatedFormat('j F Y');
@@ -26,11 +36,11 @@
 
 {{-- المرشحات في صف واحد --}}
 <form class="panel p-3 mb-6 flex flex-wrap items-end gap-3">
-    <div class="flex rounded-lg border border-line p-0.5 text-sm">
+    <nav class="seg">
         @foreach (['today' => __('اليوم'), 'week' => __('هذا الأسبوع'), 'month' => __('هذا الشهر'), 'last_month' => __('الشهر الماضي')] as $key => $label)
-            <a href="{{ route('admin.reports', ['preset' => $key]) }}" @class(['px-3 py-1.5 rounded-md', 'bg-ink text-white font-semibold' => $preset === $key, 'text-ink-soft hover:text-ink' => $preset !== $key])>{{ $label }}</a>
+            <a href="{{ route('admin.reports', ['preset' => $key]) }}" @class(['is-on' => $preset === $key])>{{ $label }}</a>
         @endforeach
-    </div>
+    </nav>
     <div>
         <label for="from" class="field-label !text-xs">{{ __('من') }}</label>
         <input id="from" type="date" name="from" value="{{ $report['from']->toDateString() }}" class="field !py-1.5">
@@ -90,8 +100,8 @@
                 <div class="relative h-full flex items-end gap-px">
                     @foreach ($series as $b)
                         <div class="chart-col" tabindex="0" aria-label="{{ $b['label'] }}: {{ $b['total'] }}">
-                            @if ($b['in_person'])<div class="seg bg-chart-inperson" style="height: {{ $b['in_person'] / $tickTop * 100 }}%"></div>@endif
-                            @if ($b['remote'])<div class="seg bg-chart-remote" style="height: {{ $b['remote'] / $tickTop * 100 }}%"></div>@endif
+                            @if ($b['in_person'])<div class="seg-bar bg-chart-inperson" style="height: {{ $b['in_person'] / $tickTop * 100 }}%"></div>@endif
+                            @if ($b['remote'])<div class="seg-bar bg-chart-remote" style="height: {{ $b['remote'] / $tickTop * 100 }}%"></div>@endif
                             <span class="chart-tip">{{ $b['label'] }}<br>{{ __('حضوري') }} {{ $b['in_person'] }}، {{ __('عن بُعد') }} {{ $b['remote'] }}</span>
                         </div>
                     @endforeach
@@ -141,7 +151,7 @@
             </div>
         @endforeach
         <div class="text-sm text-ink-soft border-t border-line-soft pt-4 flex flex-wrap gap-x-6 gap-y-1">
-            <span>{{ __('انتهت الخدمة') }}: <b class="text-ink ltr-nums">{{ $t['completed'] }}</b></span>
+            <span>{{ __('تمت الخدمة') }}: <b class="text-ink ltr-nums">{{ $t['completed'] }}</b></span>
             <span>{{ __('لم يحضر') }}: <b class="text-ink ltr-nums">{{ $t['no_show'] }}</b></span>
             <span>{{ __('ملغي') }}: <b class="text-ink ltr-nums">{{ $t['cancelled'] }}</b></span>
             <span>{{ __('صفقات مربوطة') }}: <b class="text-ink ltr-nums">{{ $t['deals'] }}</b></span>
@@ -169,7 +179,7 @@
         <div class="h-44 flex items-end gap-px border-b border-line">
             @foreach ($hours as $h)
                 <div class="chart-col" tabindex="0" aria-label="{{ $h['label'] }}: {{ $h['count'] }}">
-                    @if ($h['count'])<div class="seg bg-chart-inperson" style="height: {{ $h['count'] / $maxHour * 100 }}%"></div>@endif
+                    @if ($h['count'])<div class="seg-bar bg-chart-inperson" style="height: {{ $h['count'] / $maxHour * 100 }}%"></div>@endif
                     <span class="chart-tip">{{ $h['label'] }}: {{ $h['count'] }} {{ __('تسجيل حضوري') }}</span>
                 </div>
             @endforeach
@@ -203,31 +213,92 @@
         </ul>
     </section>
 
-    {{-- أداء الموظفين --}}
-    <section class="panel">
-        <h2 class="font-semibold px-5 pt-5 pb-3">{{ __('العملاء الذين خدمهم كل موظف') }}</h2>
-        <div class="overflow-x-auto">
-            <table class="data-table">
-                <thead>
-                    <tr><th>{{ __('الموظف') }}</th><th>{{ __('حضوري') }}</th><th>{{ __('عن بُعد') }}</th><th>{{ __('لم يحضر') }}</th><th>{{ __('متوسط الخدمة') }}</th></tr>
-                </thead>
-                <tbody>
-                    @forelse ($report['employees'] as $e)
-                        <tr>
-                            <td class="font-semibold">{{ $e['name'] }}</td>
-                            <td class="ltr-nums text-start">{{ $e['served'] }}</td>
-                            <td class="ltr-nums text-start">{{ $e['remote'] }}</td>
-                            <td class="ltr-nums text-start">{{ $e['no_show'] }}</td>
-                            <td>{{ Duration::human($e['avg_service']) }}</td>
-                        </tr>
-                    @empty
-                        <tr><td colspan="5" class="text-center text-ink-faint py-8">{{ __('لا توجد بيانات.') }}</td></tr>
-                    @endforelse
-                </tbody>
-            </table>
+    {{-- نتائج الصفقات --}}
+    @php($o = $performance['outcomes'])
+    <section class="panel p-5">
+        <div class="flex items-baseline justify-between mb-4">
+            <h2 class="font-semibold">{{ __('نتائج الصفقات') }}</h2>
+            <span class="text-sm text-ink-faint">{{ __('الإجمالي') }} <b class="font-num text-ink">{{ $o['total'] }}</b></span>
         </div>
+        @if ($o['total'] === 0)
+            <p class="py-10 text-center text-ink-faint">{{ __('لا توجد خدمات منتهية في هذه الفترة.') }}</p>
+        @else
+            <div class="flex h-4 rounded-full overflow-hidden gap-[2px] bg-surface mb-5" role="img" aria-label="{{ __('نسب نتائج الصفقات') }}">
+                @foreach (['completed' => 'bg-ok', 'missing_docs' => 'bg-[#C8901F]', 'cancelled' => 'bg-danger'] as $key => $bg)
+                    @if ($o['items'][$key]['count'])
+                        <span class="{{ $bg }}" style="width: {{ $o['items'][$key]['count'] / $o['total'] * 100 }}%"></span>
+                    @endif
+                @endforeach
+            </div>
+            <ul class="grid grid-cols-3 gap-3 text-center">
+                @foreach ($o['items'] as $key => $item)
+                    <li class="rounded-[14px] border-[1.5px] border-line py-3">
+                        <span class="status-pill outcome-{{ $key }}">{{ $item['label'] }}</span>
+                        <div class="font-num font-semibold text-[1.75rem] mt-2 leading-none">{{ $item['count'] }}</div>
+                        <div class="text-xs text-ink-faint mt-1 font-num">{{ $pct($item['count'], $o['total']) }}%</div>
+                    </li>
+                @endforeach
+            </ul>
+            <p class="mt-3 text-xs text-ink-faint">{{ __('الصفقة المربوطة (بائع ومشتري) تُحسب مرة واحدة. النتيجة يختارها الموظف عند إنهاء الخدمة.') }}</p>
+        @endif
     </section>
 </div>
+
+{{-- أداء الموظفين: الترتيب ومقارنة كل موظف بمتوسط الفريق --}}
+@php($team = $performance['team'])
+<section class="panel mt-6">
+    <div class="px-5 pt-5 pb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 class="font-semibold">{{ __('أداء الموظفين وترتيبهم') }}</h2>
+        <span class="text-xs text-ink-faint">{{ __('النسبة بجانب كل رقم = الفرق عن متوسط الفريق. اضغط اسم الموظف لرسم أدائه مع الوقت.') }}</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th class="w-12">#</th>
+                    <th>{{ __('الموظف') }}</th>
+                    <th>{{ __('خدمهم') }}</th>
+                    <th>{{ __('متوسط الخدمة') }}</th>
+                    <th>{{ __('تأخر النداء') }} <span class="font-normal">({{ __('متوسط انتظار عملائه') }})</span></th>
+                    <th>{{ __('الخمول بين العملاء') }}</th>
+                    <th>{{ __('لم يحضر') }}</th>
+                    <th>{{ __('ناقصة أوراق') }}</th>
+                    <th>{{ __('ملغاة') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                @forelse ($performance['employees'] as $e)
+                    <tr>
+                        <td><span @class(['grid place-items-center size-7 rounded-full font-num text-sm font-bold', 'bg-olive text-gold' => $e['rank'] === 1, 'bg-shade' => $e['rank'] !== 1])>{{ $e['rank'] }}</span></td>
+                        <td><a href="{{ route('admin.reports.employee', array_merge(['user' => $e['id']], request()->only('preset', 'from', 'to'))) }}" class="font-bold hover:underline underline-offset-4">{{ $e['name'] }}</a></td>
+                        <td class="whitespace-nowrap"><b class="font-num">{{ $e['served'] }}</b>{!! $chip($e['vs_team']['served']) !!}</td>
+                        <td class="whitespace-nowrap">{{ Duration::human($e['avg_service']) }}{!! $chip($e['vs_team']['avg_service'], neutral: true) !!}</td>
+                        <td class="whitespace-nowrap">{{ Duration::human($e['avg_call_wait']) }}{!! $chip($e['vs_team']['avg_call_wait'], true) !!}</td>
+                        <td class="whitespace-nowrap">{{ Duration::human($e['avg_idle']) }}{!! $chip($e['vs_team']['avg_idle'], true) !!}</td>
+                        <td class="ltr-nums">{{ $e['no_show'] }}</td>
+                        <td class="ltr-nums">{{ $e['missing_docs'] }}</td>
+                        <td class="ltr-nums">{{ $e['cancelled'] }}</td>
+                    </tr>
+                @empty
+                    <tr><td colspan="9" class="text-center text-ink-faint py-8">{{ __('لا توجد بيانات.') }}</td></tr>
+                @endforelse
+            </tbody>
+            @if ($performance['employees'])
+                <tfoot>
+                    <tr class="bg-shade/60 text-sm">
+                        <td></td>
+                        <td class="font-bold py-3 px-[0.9rem]">{{ __('متوسط الفريق') }}</td>
+                        <td class="font-num px-[0.9rem]">{{ $team['served'] }}</td>
+                        <td class="px-[0.9rem]">{{ Duration::human($team['avg_service']) }}</td>
+                        <td class="px-[0.9rem]">{{ Duration::human($team['avg_call_wait']) }}</td>
+                        <td class="px-[0.9rem]">{{ Duration::human($team['avg_idle']) }}</td>
+                        <td colspan="3"></td>
+                    </tr>
+                </tfoot>
+            @endif
+        </table>
+    </div>
+</section>
 
 <section class="panel mt-6">
     <h2 class="font-semibold px-5 pt-5 pb-3">{{ __('حسب وكيل البنك') }}</h2>
