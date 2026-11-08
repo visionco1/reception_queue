@@ -59,6 +59,7 @@
         resetSeconds: {{ max(5, (int) setting('kiosk_reset_seconds', 10)) }},
         featured: @js($featured->map(fn ($b) => ['id' => $b->id, 'name' => $b->name])->values()),
         banks: @js($banks->map(fn ($b) => ['id' => $b->id, 'name' => $b->name])->values()),
+        agents: @js($agents),
         status: @js($status),
      })"
      class="min-h-dvh lg:h-dvh grid lg:grid-cols-[minmax(340px,440px)_1fr]">
@@ -168,6 +169,17 @@
                         </button>
                     </div>
                     <p class="k-err !mt-1" x-show="errors.bank_id" x-text="errors.bank_id" x-cloak></p>
+
+                    {{-- وكيل البنك (اختياري): يظهر إن كان للبنك المختار وكلاء --}}
+                    <div x-show="form.via === 'bank' && bankAgents.length" x-cloak>
+                        <p class="text-[15px] font-semibold text-ink-soft mb-2" x-text="t('chooseAgent')"></p>
+                        <div class="grid grid-cols-4 gap-[10px]" role="radiogroup" :aria-label="t('chooseAgent')">
+                            <template x-for="a in bankAgents" :key="a.id">
+                                <button type="button" role="radio" class="k-bank" :aria-checked="String(form.agent_id) === String(a.id)" @click="pickAgent(a.id)" x-text="a.name"></button>
+                            </template>
+                        </div>
+                    </div>
+                    <p class="k-err !mt-1" x-show="errors.agent_id" x-text="errors.agent_id" x-cloak></p>
 
                     {{-- تفصيل «أخرى» (اختياري) --}}
                     <div x-show="form.via === 'other'" x-cloak class="grid grid-cols-2 gap-[10px]" role="radiogroup">

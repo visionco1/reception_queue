@@ -321,6 +321,21 @@ class QueueFlowTest extends TestCase
         $this->assertSame('966550000003', $near->to_phone);
     }
 
+    public function test_display_feed_sends_state_settings_and_is_idle_outside_work_hours(): void
+    {
+        app(\App\Support\Settings::class)->set(['display_alert_seconds' => 8, 'display_idle_minutes' => 15, 'display_volume' => 40]);
+
+        $this->getJson('/display/display-secret/feed')->assertOk()
+            ->assertJsonPath('open', true)
+            ->assertJsonPath('alert_seconds', 8)
+            ->assertJsonPath('idle_minutes', 15)
+            ->assertJsonPath('volume', 40);
+
+        $this->travelTo(today()->setTime(23, 0));
+        app(\App\Support\Settings::class)->set(['work_start' => '08:00', 'work_end' => '16:00']);
+        $this->getJson('/display/display-secret/feed')->assertOk()->assertJsonPath('open', false);
+    }
+
     public function test_display_feed_requires_secret(): void
     {
         $this->get('/display/display-secret')->assertOk();

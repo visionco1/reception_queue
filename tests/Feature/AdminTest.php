@@ -101,7 +101,7 @@ class AdminTest extends TestCase
         $settings = [
             'company_name' => 'شركة سلطان الهيضل', 'ticket_prefix_buyer' => 'b', 'ticket_prefix_seller' => 'b', 'ticket_prefix_other' => 'g',
             'ticket_digits' => 3, 'kiosk_reset_seconds' => 10, 'default_service_minutes' => 15, 'country_code' => '966',
-            'employee_search_scope' => 'all', 'display_mode' => 'current', 'display_idle_seconds' => 60, 'display_recent_count' => 5,
+            'employee_search_scope' => 'all', 'display_mode' => 'current', 'display_alert_seconds' => 10, 'display_idle_minutes' => 10, 'display_volume' => 80, 'display_recent_count' => 5,
             'ticker_messages' => "أهلًا بكم\nيرجى إحضار الهوية", 'work_start' => '', 'work_end' => '',
         ];
         $this->actingAs($admin)->put('/admin/settings', $settings)->assertSessionHasErrors('ticket_prefix_buyer');

@@ -170,6 +170,11 @@ class QueueActionController extends Controller
             'agent_id' => ['nullable', Rule::exists('bank_agents', 'id')->where('bank_id', $bankId ?? 0)],
         ], ['agent_id.exists' => __('الوكيل لا يتبع بنك العميل')]);
 
+        // أطراف الصفقة الواحدة من نفس البنك
+        if ($visit->partners()->contains(fn (Visit $p) => $p->bank_id != $bankId)) {
+            throw new \App\Exceptions\QueueException(__('العميل مرتبط بطرف من بنك آخر. فك الربط أولًا ثم غيّر البنك.'));
+        }
+
         $before = ['bank' => $visit->bank?->name, 'agent' => $visit->agent?->name];
         $visit->update([
             'bank_id' => $bankId,

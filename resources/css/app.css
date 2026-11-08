@@ -573,10 +573,16 @@
         flex-shrink: 0;
     }
 
+    /* الـ checkbox يغطي الزر كله ليُضغط مباشرة، حتى لو لم يكن داخل <label> */
     .switch input {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        width: 100%;
+        height: 100%;
+        margin: 0;
         opacity: 0;
-        width: 0;
-        height: 0;
+        cursor: pointer;
     }
 
     .switch span {

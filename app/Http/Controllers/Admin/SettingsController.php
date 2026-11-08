@@ -32,7 +32,9 @@ class SettingsController extends Controller
             'work_start' => ['nullable', 'date_format:H:i', 'required_with:work_end'],
             'work_end' => ['nullable', 'date_format:H:i', 'required_with:work_start'],
             'display_mode' => ['required', 'in:current,offices'],
-            'display_idle_seconds' => ['required', 'integer', 'min:10', 'max:3600'],
+            'display_alert_seconds' => ['required', 'integer', 'min:3', 'max:60'],
+            'display_idle_minutes' => ['required', 'integer', 'min:1', 'max:240'],
+            'display_volume' => ['required', 'integer', 'min:0', 'max:100'],
             'display_recent_count' => ['required', 'integer', 'min:1', 'max:8'],
             'ticker_messages' => ['nullable', 'string', 'max:2000'],
         ], [

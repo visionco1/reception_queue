@@ -10,8 +10,9 @@ use App\Models\DisplayCall;
 use App\Models\Visit;
 use App\Services\QueueService;
 use App\Support\Settings;
+use App\Support\WorkHours;
 
-/** شاشة العرض في صالة الانتظار: النداء، المكاتب، ووقت الهدوء */
+/** شاشة العرض في صالة الانتظار: الخمول، تنبيه النداء الجديد، والنشاط مع جدول النداءات */
 class DisplayController extends Controller
 {
     public function show(string $token, Settings $settings)
@@ -53,8 +54,12 @@ class DisplayController extends Controller
             'version' => $settings->version(),
             'server_time' => now()->toIso8601String(),
             'mode' => setting('display_mode') === 'offices' ? 'offices' : 'current',
-            'idle_seconds' => max(10, (int) setting('display_idle_seconds', 60)),
+            // خارج الدوام تبقى الشاشة على الخمول
+            'open' => WorkHours::isOpen(),
+            'alert_seconds' => max(3, (int) setting('display_alert_seconds', 10)),
+            'idle_minutes' => max(1, (int) setting('display_idle_minutes', 10)),
             'sound' => (bool) setting('display_sound'),
+            'volume' => max(0, min(100, (int) setting('display_volume', 80))),
             'voice' => (bool) setting('display_voice'),
             'ticker' => $this->ticker(),
             'current' => $current ? [

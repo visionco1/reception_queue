@@ -27,7 +27,7 @@ class AgentsAndDealsTest extends TestCase
         $this->agent = BankAgent::create(['bank_id' => Bank::first()->id, 'name' => 'خالد المندوب']);
     }
 
-    /** التسجيل من الآيباد ثم الوكيل كما يحدده الموظف (الوكيل لا يُختار على الآيباد) */
+    /** التسجيل من الآيباد ثم الوكيل كما يحدده الموظف */
     private function register(string $mobile, string $type, ?string $agent = null): Visit
     {
         $this->registerAtKiosk(['mobile' => $mobile, 'customer_type' => $type])->assertCreated();
@@ -37,11 +37,55 @@ class AgentsAndDealsTest extends TestCase
         return $visit->fresh();
     }
 
-    public function test_kiosk_does_not_ask_for_the_agent(): void
+    public function test_kiosk_lets_the_customer_pick_an_agent_of_the_chosen_bank(): void
     {
+        $this->get('/kiosk/kiosk-secret')->assertSee('خالد المندوب');
+
         $this->registerAtKiosk(['agent_id' => (string) $this->agent->id])->assertCreated();
+        $this->assertSame($this->agent->id, Visit::sole()->agent_id);
+    }
+
+    public function test_kiosk_rejects_an_agent_of_another_bank_or_inactive(): void
+    {
+        $otherBank = Bank::where('id', '!=', $this->agent->bank_id)->first();
+        $this->registerAtKiosk(['bank_id' => (string) $otherBank->id, 'agent_id' => (string) $this->agent->id])
+            ->assertUnprocessable()->assertJsonValidationErrors('agent_id');
+
+        $this->agent->update(['is_active' => false]);
+        $this->registerAtKiosk(['agent_id' => (string) $this->agent->id])
+            ->assertUnprocessable()->assertJsonValidationErrors('agent_id');
+    }
+
+    public function test_kiosk_agent_is_optional(): void
+    {
+        $this->registerAtKiosk()->assertCreated();
         $this->assertNull(Visit::sole()->agent_id);
-        $this->get('/kiosk/kiosk-secret')->assertDontSee('خالد المندوب');
+    }
+
+    public function test_cannot_link_two_customers_of_the_same_type(): void
+    {
+        $employee = $this->employee(1);
+        $s1 = $this->register('0550000001', 'seller');
+        $s2 = $this->register('0550000002', 'seller');
+        $this->actingAs($employee)->postJson("/staff/visits/{$s1->id}/take")->assertOk();
+
+        $this->actingAs($employee)->getJson("/staff/visits/{$s1->id}/candidates")->assertJsonCount(0, 'candidates');
+        $this->actingAs($employee)->postJson("/staff/visits/{$s1->id}/link", ['other_id' => $s2->id])->assertStatus(422);
+        $this->assertNull($s2->fresh()->deal_id);
+    }
+
+    public function test_cannot_link_customers_of_different_banks(): void
+    {
+        $employee = $this->employee(1);
+        $otherBank = Bank::where('id', '!=', $this->agent->bank_id)->first();
+        $seller = $this->register('0550000001', 'seller');
+        $buyer = $this->register('0550000002', 'buyer', 'none');
+        $buyer->update(['bank_id' => $otherBank->id]);
+        $this->actingAs($employee)->postJson("/staff/visits/{$seller->id}/take")->assertOk();
+
+        $this->actingAs($employee)->getJson("/staff/visits/{$seller->id}/candidates")->assertJsonCount(0, 'candidates');
+        $this->actingAs($employee)->postJson("/staff/visits/{$seller->id}/link", ['other_id' => $buyer->id])->assertStatus(422);
+        $this->assertNull($buyer->fresh()->deal_id);
     }
 
     public function test_kiosk_only_accepts_buyer_or_seller(): void

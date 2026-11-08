@@ -514,18 +514,22 @@ class QueueService
     {
         $opposite = $visit->customer_type->opposite();
 
+        if (! $opposite) {
+            return collect();
+        }
+
+        // يظهر الطرف المقابل فقط (بائع ↔ مشتري) ومن نفس البنك
         return Visit::query()
             ->with('customer', 'ticket', 'agent', 'bank', 'employee', 'desk')
             ->whereKeyNot($visit->id)
             ->whereNull('deal_id')
-            ->whereIn('customer_type', array_map(fn ($t) => $t->value, CustomerType::queueTypes()))
+            ->where('customer_type', $opposite->value)
+            ->when($visit->bank_id, fn ($q) => $q->where('bank_id', $visit->bank_id), fn ($q) => $q->whereNull('bank_id'))
             ->where('status', '!=', VisitStatus::Cancelled->value)
             ->where('created_at', '>=', today())
             ->get()
             ->sortBy(fn (Visit $v) => [
-                ($visit->agent_id && $v->agent_id === $visit->agent_id && $v->customer_type === $opposite) ? 0 : 1,
-                $v->customer_type === $opposite ? 0 : 1,
-                ($visit->bank_id && $v->bank_id === $visit->bank_id) ? 0 : 1,
+                ($visit->agent_id && $v->agent_id === $visit->agent_id) ? 0 : 1,
                 $v->status === VisitStatus::Waiting ? 0 : 1,
                 $v->id,
             ])
@@ -549,6 +553,12 @@ class QueueService
         }
         if (! $visit->customer_type->isParty() || ! $other->customer_type->isParty()) {
             throw new QueueException(__('الربط للبائعين والمشترين فقط.'));
+        }
+        if ($other->customer_type === $visit->customer_type) {
+            throw new QueueException(__('لا يمكن ربط :type بـ:type. الربط بين بائع ومشتري فقط.', ['type' => $visit->customer_type->label()]));
+        }
+        if ($other->bank_id != $visit->bank_id) {
+            throw new QueueException(__('لا يمكن الربط: الطرفان ليسا من نفس البنك.'));
         }
         if ($other->status === VisitStatus::Cancelled) {
             throw new QueueException(__('لا يمكن الربط بزيارة ملغاة.'));

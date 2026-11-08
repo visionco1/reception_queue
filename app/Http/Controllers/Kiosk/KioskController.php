@@ -8,6 +8,7 @@ use App\Enums\ViaDetail;
 use App\Exceptions\QueueException;
 use App\Http\Controllers\Controller;
 use App\Models\Bank;
+use App\Models\BankAgent;
 use App\Rules\Mobile;
 use App\Services\QueueService;
 use App\Services\WhatsApp\WhatsAppService;
@@ -27,6 +28,9 @@ class KioskController extends Controller
             'token' => $token,
             'featured' => ($banks->where('is_featured', true)->isNotEmpty() ? $banks->where('is_featured', true) : $banks)->take(4)->values(),
             'banks' => $banks,
+            // وكلاء كل بنك يظهرون بعد اختيار البنك
+            'agents' => BankAgent::query()->active()->ordered()->whereIn('bank_id', $banks->pluck('id'))->get(['id', 'bank_id', 'name'])
+                ->groupBy('bank_id')->map(fn ($g) => $g->map(fn ($a) => ['id' => $a->id, 'name' => $a->name])->values()),
             'status' => $this->status($queue),
         ]);
     }
@@ -54,6 +58,7 @@ class KioskController extends Controller
             'via' => ['required', Rule::in(['bank', 'other'])],
             'bank_id' => ['nullable', 'required_if:via,bank', Rule::exists('banks', 'id')->where('is_active', true)],
             'via_detail' => ['nullable', Rule::enum(ViaDetail::class)],
+            'agent_id' => ['nullable', Rule::exists('bank_agents', 'id')->where('is_active', true)->where('bank_id', (int) $request->input('bank_id'))],
         ], [
             'name.required' => __('اكتب اسمك'),
             'name.min' => __('الاسم حرفين على الأقل'),
@@ -63,6 +68,7 @@ class KioskController extends Controller
             'via.required' => __('اختر عن طريق بنك أو أخرى'),
             'bank_id.required_if' => __('اختر البنك'),
             'bank_id.exists' => __('اختر البنك من القائمة'),
+            'agent_id.exists' => __('اختر الوكيل من القائمة'),
         ]);
 
         $bankId = $data['via'] === 'bank' ? (int) $data['bank_id'] : null;
@@ -72,6 +78,7 @@ class KioskController extends Controller
             mobile: Phone::normalize(Phone::toAsciiDigits($data['mobile'])),
             type: CustomerType::from($data['customer_type']),
             bankId: $bankId,
+            agentId: $bankId && ! empty($data['agent_id']) ? (int) $data['agent_id'] : null,
             via: $bankId ? null : ViaDetail::tryFrom($data['via_detail'] ?? ''),
         );
 

@@ -25,6 +25,7 @@ const T = {
         individuals: 'أفراد',
         otherBank: 'بنك آخر',
         chooseBank: 'اختر البنك',
+        chooseAgent: 'وكيل البنك (اختياري)',
         register: 'تسجيل وأخذ رقم',
         sending: 'جارٍ التسجيل…',
         done: 'تم تسجيلك،',
@@ -66,6 +67,7 @@ const T = {
         individuals: 'Individuals',
         otherBank: 'Other bank',
         chooseBank: 'Choose your bank',
+        chooseAgent: 'Bank agent (optional)',
         register: 'Register & get a number',
         sending: 'Registering…',
         done: 'You are registered,',
@@ -90,7 +92,7 @@ const T = {
     },
 };
 
-const empty = () => ({ name: '', mobile: '', customer_type: '', via: '', bank_id: '', via_detail: '' });
+const empty = () => ({ name: '', mobile: '', customer_type: '', via: '', bank_id: '', agent_id: '', via_detail: '' });
 
 export default (config) => ({
     lang: 'ar',
@@ -148,6 +150,11 @@ export default (config) => ({
         return config.banks.find((b) => String(b.id) === String(this.form.bank_id))?.name ?? '';
     },
 
+    /** وكلاء البنك المختار */
+    get bankAgents() {
+        return (config.agents || {})[this.form.bank_id] || [];
+    },
+
     get mobileDigits() {
         return this.form.mobile.replace(/\D/g, '').replace(/^0/, '');
     },
@@ -164,16 +171,27 @@ export default (config) => ({
 
     setVia(v) {
         this.form.via = v;
-        if (v === 'other') this.form.bank_id = '';
-        else this.form.via_detail = '';
+        if (v === 'other') {
+            this.form.bank_id = '';
+            this.form.agent_id = '';
+        } else {
+            this.form.via_detail = '';
+        }
         delete this.errors.via;
         delete this.errors.bank_id;
     },
 
     pickBank(id) {
+        if (String(id) !== String(this.form.bank_id)) this.form.agent_id = '';
         this.form.bank_id = String(id);
         this.banksOpen = false;
         delete this.errors.bank_id;
+    },
+
+    /** الضغط مرة ثانية على الوكيل نفسه يلغي اختياره */
+    pickAgent(id) {
+        this.form.agent_id = String(this.form.agent_id) === String(id) ? '' : String(id);
+        delete this.errors.agent_id;
     },
 
     onMobileInput(e) {

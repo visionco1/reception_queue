@@ -6,9 +6,12 @@ const LETTER_NAMES = {
 };
 
 /**
- * شاشة العرض (الشاشة 02): تستعلم عن النداءات دوريًا. عند كل نداء يظهر الرقم
- * بحركة تكبير خفيفة مع صوت تنبيه ونطق آلي بالعربي، وبعد فترة بدون نداء جديد
- * تعود الشاشة للشعار (وقت الهدوء). تعيد التحميل إذا غيّرت الإدارة الإعدادات.
+ * شاشة العرض (الشاشة 02) بثلاث حالات:
+ * - idle: ترحيب بالشعار وخطوات الخدمة بدون جدول. عند التشغيل، وخارج الدوام،
+ *   وبعد دقائق بدون نداء إذا لم يكن أحد في الانتظار.
+ * - alert: نداء جديد أو إعادة نداء — جرس ونطق، الرقم يومض ويتوهج لعدة ثوانٍ.
+ * - active: الرقم الحالي يمين وجدول النداءات السابقة يسار.
+ * تعيد التحميل إذا غيّرت الإدارة الإعدادات.
  */
 export default (config) => ({
     data: null,
@@ -19,6 +22,7 @@ export default (config) => ({
     audio: null,
     offset: 0,
     zoomKey: 0,
+    alertUntil: 0,
     tickerKey: '',
 
     init() {
@@ -78,27 +82,36 @@ export default (config) => ({
             if (key !== this.tickerKey) this.tickerKey = key;
             if (incoming) this.lastId = incoming.id;
             else if (firstLoad) this.lastId = 0;
-            this.updateView();
             if (isNew && !firstLoad) this.announce(incoming);
+            else this.updateView();
         } catch (e) {
             this.offline = true;
         }
     },
 
-    /** current: الرقم الحالي | offices: لوحة المكاتب | idle: الشعار بعد فترة بدون نداء */
+    /** idle | alert | active (أو offices في وضع لوحة المكاتب) */
     updateView() {
         if (!this.data) return;
         const call = this.current;
         const age = call ? (Date.now() + this.offset - new Date(call.at).getTime()) / 1000 : Infinity;
-        const quiet = age > (this.data.idle_seconds || 60);
-        if (this.data.mode === 'offices') {
-            this.view = quiet && !this.offices.some((o) => o.tickets.length) ? 'idle' : 'offices';
+        const quiet = age > (this.data.idle_minutes || 10) * 60 && this.waiting.total === 0;
+        if (!this.data.open || !call || quiet) {
+            this.view = 'idle';
+        } else if (this.data.mode === 'offices') {
+            this.view = 'offices';
         } else {
-            this.view = quiet ? 'idle' : 'current';
+            this.view = Date.now() < this.alertUntil ? 'alert' : 'active';
         }
     },
 
+    get showTable() {
+        return this.view === 'alert' || this.view === 'active';
+    },
+
     announce(call) {
+        // نداء جديد أثناء التنبيه يبدأ العد من جديد
+        this.alertUntil = Date.now() + (this.data?.alert_seconds || 10) * 1000;
+        this.updateView();
         this.zoomKey++;
         if (this.data?.sound) this.chime();
         if (this.data?.voice) setTimeout(() => this.speak(call), 1300);
@@ -108,6 +121,8 @@ export default (config) => ({
         try {
             this.audio = this.audio || new (window.AudioContext || window.webkitAudioContext)();
             const ctx = this.audio;
+            const volume = (this.data?.volume ?? 80) / 100;
+            if (volume <= 0) return;
             [[659.25, 0], [523.25, 0.55]].forEach(([freq, delay]) => {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
@@ -115,7 +130,7 @@ export default (config) => ({
                 osc.frequency.value = freq;
                 const t = ctx.currentTime + delay;
                 gain.gain.setValueAtTime(0.0001, t);
-                gain.gain.exponentialRampToValueAtTime(0.5, t + 0.03);
+                gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, 0.6 * volume), t + 0.03);
                 gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
                 osc.connect(gain).connect(ctx.destination);
                 osc.start(t);
@@ -135,8 +150,11 @@ export default (config) => ({
     speak(call) {
         if (!('speechSynthesis' in window)) return;
         const tickets = (call.tickets || []).map((t) => this.spokenTicket(t));
-        const label = tickets.length > 1 ? 'الأرقام' : 'الرقم';
-        const u = new SpeechSynthesisUtterance(`${label} ${tickets.join(' و ')}، مكتب ${call.desk}`);
+        const text = tickets.length > 1
+            ? `الأرقام ${tickets.join(' و ')}، تفضلوا إلى مكتب ${call.desk}`
+            : `الرقم ${tickets[0]}، تفضل إلى مكتب ${call.desk}`;
+        const u = new SpeechSynthesisUtterance(text);
+        u.volume = Math.min(1, (this.data?.volume ?? 80) / 100);
         u.lang = 'ar-SA';
         u.rate = 0.9;
         const voice = window.speechSynthesis.getVoices().find((v) => v.lang?.startsWith('ar'));

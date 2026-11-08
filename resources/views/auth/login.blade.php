@@ -34,17 +34,8 @@
                                     :aria-pressed="show" x-text="show ? '{{ __('إخفاء') }}' : '{{ __('إظهار') }}'">{{ __('إظهار') }}</button>
                         </div>
                     </div>
-                    <div>
-                        <label for="desk_id" class="field-label">{{ __('المكتب') }}</label>
-                        <select id="desk_id" name="desk_id" class="field !h-[58px] !text-[17px]">
-                            <option value="">{{ __('اختر المكتب') }}</option>
-                            @foreach ($desks as $d)
-                                <option value="{{ $d->id }}" @selected((string) old('desk_id', $rememberedDesk) === (string) $d->id)>{{ __('مكتب :n', ['n' => $d->number]) }}</option>
-                            @endforeach
-                        </select>
-                    </div>
                     <label class="flex items-center gap-2.5 text-sm text-ink-faint select-none">
-                        <input type="checkbox" name="remember" value="1" class="size-[18px] accent-olive" @checked(old('remember', (bool) $rememberedDesk))>
+                        <input type="checkbox" name="remember" value="1" class="size-[18px] accent-olive" @checked(old('remember'))>
                         {{ __('تذكرني على هذا الجهاز') }}
                     </label>
                 </div>
@@ -66,7 +57,6 @@
         <img src="{{ asset('brand/logo-gold.svg') }}" alt="{{ setting('company_name') }}" class="brand-logo w-[260px] lg:w-[340px] ms-0 self-start">
         <div class="mt-10 lg:mt-auto">
             <h2 class="text-[34px] font-bold text-white leading-tight">{{ __('بوابة الموظفين') }}</h2>
-            <p class="mt-3 text-[1.05rem] leading-[1.9] text-[#d6cfc0] max-w-[22rem]">{{ __('إدارة استقبال العملاء ومتابعة الطابور في مقر الشركة.') }}</p>
         </div>
         <div class="mt-8 lg:mt-14 hidden sm:block" data-clock>
             <div class="text-[44px] font-semibold text-ivory leading-none">

@@ -131,18 +131,27 @@
                 </div>
                 <div class="grid sm:grid-cols-2 gap-5">
                     <div>
-                        <label for="dis" class="field-label">{{ __('العودة للشعار بعد (ثانية)') }}</label>
-                        <input id="dis" type="number" min="10" max="3600" name="display_idle_seconds" value="{{ old('display_idle_seconds', $s['display_idle_seconds']) }}" class="field">
-                        <p class="field-hint">{{ __('بعد آخر نداء بدون نداء جديد تعرض الشاشة الشعار (وقت الهدوء).') }}</p>
+                        <label for="das" class="field-label">{{ __('مدة تنبيه النداء (ثانية)') }}</label>
+                        <input id="das" type="number" min="3" max="60" name="display_alert_seconds" value="{{ old('display_alert_seconds', $s['display_alert_seconds']) }}" class="field">
+                        <p class="field-hint">{{ __('يتوهج الرقم الجديد مع شارة «نداء جديد» طوال هذه المدة.') }}</p>
+                    </div>
+                    <div>
+                        <label for="dim" class="field-label">{{ __('العودة للخمول بعد (دقيقة)') }}</label>
+                        <input id="dim" type="number" min="1" max="240" name="display_idle_minutes" value="{{ old('display_idle_minutes', $s['display_idle_minutes']) }}" class="field">
+                        <p class="field-hint">{{ __('بدون أي نداء وعدد المنتظرين صفر تعرض الشاشة الترحيب. خارج الدوام تبقى على الترحيب.') }}</p>
                     </div>
                     <div>
                         <label for="drc" class="field-label">{{ __('عدد النداءات السابقة') }}</label>
                         <input id="drc" type="number" min="1" max="8" name="display_recent_count" value="{{ old('display_recent_count', $s['display_recent_count']) }}" class="field">
                     </div>
                 </div>
+                <div>
+                    <label for="dvol" class="field-label">{{ __('مستوى صوت التنبيه') }}</label>
+                    <input id="dvol" type="range" min="0" max="100" step="5" name="display_volume" value="{{ old('display_volume', $s['display_volume']) }}" class="w-full accent-olive">
+                </div>
                 @foreach ([
                     ['display_sound', __('صوت تنبيه عند كل نداء')],
-                    ['display_voice', __('نطق آلي بالعربي: «الرقم M-014، مكتب 2» (حسب دعم المتصفح)')],
+                    ['display_voice', __('نطق آلي بالعربي: «الرقم M-014 تفضّل إلى مكتب 2» (حسب دعم المتصفح)')],
                 ] as [$name, $label])
                     <label class="flex items-start gap-3">
                         <span class="switch mt-0.5"><input type="checkbox" name="{{ $name }}" value="1" @checked($s[$name])><span></span></span>
